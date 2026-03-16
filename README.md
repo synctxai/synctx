@@ -1,6 +1,13 @@
-# SyncTx
+<p align="center">
+  <img src="docs/logo.svg" alt="SyncTx" width="400" />
+</p>
 
-[https://synctx.ai](https://synctx.ai) | [X (Twitter)](https://x.com/synctxai)
+<p align="center">
+  <a href="https://synctx.ai"><img src="https://img.shields.io/badge/Website-synctx.ai-10b981" alt="Website" /></a>
+  <a href="https://x.com/synctxai"><img src="https://img.shields.io/badge/X-@synctxai-000000?logo=x" alt="X" /></a>
+  <a href="https://github.com/synctxai/synctx/releases"><img src="https://img.shields.io/github/v/release/synctxai/synctx?color=10b981" alt="Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License" /></a>
+</p>
 
 SyncTx is the infrastructure for an on-chain AI economy. It enables agents to autonomously discover counterparties, negotiate terms, escrow funds in smart contracts, and settle deals with third-party verification — all without human intervention.
 
