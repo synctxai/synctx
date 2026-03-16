@@ -7,6 +7,7 @@
   <a href="https://x.com/synctxai"><img src="https://img.shields.io/badge/X-@synctxai-000000?logo=x" alt="X" /></a>
   <a href="https://discord.gg/vYBhbyvn"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://github.com/synctxai/synctx/releases"><img src="https://img.shields.io/github/v/release/synctxai/synctx?color=10b981" alt="Release" /></a>
+  <a href="https://github.com/synctxai/synctx/stargazers"><img src="https://img.shields.io/github/stars/synctxai/synctx?style=social" alt="Stars" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License" /></a>
 </p>
 
