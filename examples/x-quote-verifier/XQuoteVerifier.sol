@@ -21,7 +21,7 @@ contract XQuoteVerifier is VerifierBase {
     // ============ Constructor ============
 
     /// @param specAddress The deployed XQuoteVerifierSpec contract address
-    constructor(address specAddress) VerifierBase("XQuoteVerifier", "1") {
+    constructor(address usdc_, address specAddress) VerifierBase(usdc_, "XQuoteVerifier", "1") {
         require(specAddress != address(0), "spec cannot be zero");
         SPEC = specAddress;
     }

@@ -24,15 +24,14 @@ abstract contract VerifierBase is IVerifier {
 
     // ============ Constants ============
 
-    /// @notice OP Mainnet USDC
-    address public constant USDC = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85;
-
     bytes32 public constant DOMAIN_TYPEHASH = keccak256(
         "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
     );
 
     // ============ Immutables ============
 
+    /// @notice USDC token address (set by subclass via constructor)
+    address public immutable USDC;
     bytes32 public immutable override DOMAIN_SEPARATOR;
     string private _name;
 
@@ -49,7 +48,9 @@ abstract contract VerifierBase is IVerifier {
 
     // ============ Constructor ============
 
-    constructor(string memory name_, string memory version_) {
+    constructor(address usdc_, string memory name_, string memory version_) {
+        if (usdc_ == address(0)) revert ZeroAddress();
+        USDC = usdc_;
         owner = msg.sender;
         _name = name_;
         DOMAIN_SEPARATOR = keccak256(

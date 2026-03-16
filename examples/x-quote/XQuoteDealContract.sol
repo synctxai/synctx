@@ -9,7 +9,7 @@ import "./IUSDC.sol";
 
 
 /// @title XQuoteDealContract - X Quote Tweet Deal Contract
-/// @notice Single contract managing all deals. Optimized for OP Mainnet.
+/// @notice Single contract managing all deals. USDC address set via constructor.
 /// @dev USDC approve · Packed storage · Custom errors · Direct payout
 ///      v4: VerifierSpec architecture — check() via spec contract, flat verification params
 contract XQuoteDealContract is DealContractBase {
@@ -92,9 +92,6 @@ contract XQuoteDealContract is DealContractBase {
 
     // ===================== Constants =====================
 
-    /// @notice OP Mainnet USDC
-    address public constant USDC = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85;
-
     /// @notice Minimum allowed protocol fee (0.01 USDC with 6 decimals)
     uint96 public constant MIN_PROTOCOL_FEE = 10_000;
 
@@ -106,6 +103,9 @@ contract XQuoteDealContract is DealContractBase {
 
     /// @notice Timeout for A/B to finish settlement before funds are confiscated
     uint256 public constant SETTLING_TIMEOUT = 12 hours;
+
+    /// @notice USDC token address
+    address public immutable USDC;
 
     /// @notice Protocol fee collector contract
     address public immutable FEE_COLLECTOR;
@@ -167,12 +167,14 @@ contract XQuoteDealContract is DealContractBase {
         _;
     }
 
-    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec) {
+    constructor(address usdc_, address feeCollector, uint96 protocolFee_, address requiredSpec) {
+        if (usdc_ == address(0)) revert InvalidParams();
         if (feeCollector == address(0) || feeCollector == address(this) || feeCollector.code.length == 0) {
             revert InvalidFeeCollector();
         }
         if (protocolFee_ < MIN_PROTOCOL_FEE) revert FeeTooLow();
         if (requiredSpec == address(0)) revert InvalidSpecAddress();
+        USDC = usdc_;
         FEE_COLLECTOR = feeCollector;
         PROTOCOL_FEE = protocolFee_;
         REQUIRED_SPEC = requiredSpec;
@@ -725,8 +727,8 @@ contract XQuoteDealContract is DealContractBase {
             "- **Settlement**: After A manually confirms or verifier auto-verifies, B receives the reward\n\n"
             "| Item | Value |\n"
             "|----|----|\n"
-            "| Chain | OP Mainnet (chainId: 10) |\n"
-            "| Token | USDC `0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85` (decimals=6) |\n"
+            "| Chain | Check `block.chainid` |\n"
+            "| Token | USDC (decimals=6), address available via `USDC()` |\n"
             "| Amount format | Raw value x10^6, e.g. 1.5 USDC = `1500000` |\n\n"
             "---\n\n"
             "## Price Negotiation\n\n"
