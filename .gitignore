@@ -1,0 +1,6 @@
+.env
+auth_token.txt
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
