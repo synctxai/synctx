@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abi import call, invoke
 from wallet import address, fmt
 

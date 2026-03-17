@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from web3 import Web3
 from eth_abi import decode
 from eth_abi.exceptions import DecodingError

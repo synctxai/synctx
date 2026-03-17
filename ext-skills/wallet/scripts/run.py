@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.9"
 # dependencies = [
 #   "web3>=7.0,<8",
 #   "eth-abi>=5.0,<6",
@@ -16,6 +16,8 @@ Usage:
   uv run scripts/run.py -c "<python code>"   (advanced escape hatch)
 
 Commands:
+  check-wallet         Check wallet configuration status
+  generate-wallet      Generate a new wallet and save to .env
   address              Show wallet address
   eth-balance          Native token balance
   balance              ERC20 token balance
@@ -131,6 +133,14 @@ def cmd_decode_revert(args):
     from decoder import decode_revert
     _out(decode_revert(args.data, contract_address=args.contract, chain_id=args.chain))
 
+def cmd_check_wallet(_args):
+    from chains import check_wallet
+    _out(check_wallet())
+
+def cmd_generate_wallet(_args):
+    from chains import generate_wallet
+    _out(generate_wallet())
+
 def cmd_to_raw(args):
     from wallet import to_raw
     _out(to_raw(args.amount, args.decimals))
@@ -217,6 +227,12 @@ def main():
     p.add_argument("--contract", help="Contract address (for custom errors)")
     p.add_argument("--chain", type=int, default=10)
 
+    # check-wallet
+    sub.add_parser("check-wallet", help="Check wallet configuration status")
+
+    # generate-wallet
+    sub.add_parser("generate-wallet", help="Generate a new wallet and save to .env")
+
     # to-raw
     p = sub.add_parser("to-raw", help="Human amount -> raw integer")
     p.add_argument("amount", type=float, help="Human-readable amount")
@@ -237,6 +253,7 @@ def main():
         "address": cmd_address, "eth-balance": cmd_eth_balance,
         "balance": cmd_balance, "list-functions": cmd_list_functions,
         "call": cmd_call, "invoke": cmd_invoke,
+        "check-wallet": cmd_check_wallet, "generate-wallet": cmd_generate_wallet,
         "approve": cmd_approve, "approve-and-invoke": cmd_approve_and_invoke,
         "sign-message": cmd_sign_message, "sign-typed-data": cmd_sign_typed_data,
         "decode-logs": cmd_decode_logs, "decode-revert": cmd_decode_revert,

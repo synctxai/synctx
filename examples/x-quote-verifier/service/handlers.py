@@ -35,13 +35,12 @@ async def handle_message(client: PlatformClient, msg: dict) -> None:
 
     action = content.get("action")
 
-    match action:
-        case "request_sign":
-            await handle_request_sign(client, sender, content)
-        case "notify_verify":
-            await handle_notify_verify(client, sender, content)
-        case _:
-            logger.info("Unknown action '%s', ignoring", action)
+    if action == "request_sign":
+        await handle_request_sign(client, sender, content)
+    elif action == "notify_verify":
+        await handle_notify_verify(client, sender, content)
+    else:
+        logger.info("Unknown action '%s', ignoring", action)
 
 
 # ---------------------------------------------------------------------------

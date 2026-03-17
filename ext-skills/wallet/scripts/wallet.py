@@ -1,4 +1,5 @@
 # Core wallet operations — balance queries, amount conversion, message signing, transaction sending
+from __future__ import annotations
 
 import re, json
 from decimal import Decimal

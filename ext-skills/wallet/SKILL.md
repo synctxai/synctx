@@ -9,7 +9,7 @@ description: >
   Also use when the user mentions wallet, ETH, USDC, token balance, contract calls,
   DeFi, on-chain interaction, or transaction signing, even if they don't explicitly
   say "wallet".
-compatibility: "Requires Python 3.11+ and uv (https://docs.astral.sh/uv/). Fallback: python3 + pip also works."
+compatibility: "Requires Python 3.9+ and uv (https://docs.astral.sh/uv/). Fallback: python3 + pip also works."
 metadata:
   author: synctxai
   version: "1.0"
@@ -18,6 +18,15 @@ metadata:
 # Wallet Skill
 
 Multi-chain EVM wallet: Optimism (10, default), Ethereum (1), Base (8453), Arbitrum (42161).
+
+## On Load
+
+When this skill is first loaded, **immediately** run `check-wallet` before doing anything else.
+Based on the result:
+
+- `"status": "ok"` → Wallet is ready. Proceed with the user's request.
+- `"status": "no_env"` or `"status": "no_key"` → Tell the user: "Wallet is not configured yet. I can generate a new wallet for you, or you can provide your own private key." Wait for the user's choice before proceeding.
+- `"status": "invalid_key"` → Tell the user their private key in `.env` is invalid and ask them to fix it or let you generate a new one.
 
 ## Critical Constraints
 
@@ -28,8 +37,8 @@ Multi-chain EVM wallet: Optimism (10, default), Ethereum (1), Base (8453), Arbit
 ## Setup
 
 1. Install uv (if not installed): `curl -LsSf https://astral.sh/uv/install.sh | sh`
-2. Configuration: `PRIVATE_KEY` in `.env` (next to SKILL.md). If `.env` missing: `cp .env.example .env`.
-3. Dependencies are automatically installed on first run via PEP 723.
+2. Dependencies are automatically installed on first run via PEP 723.
+3. **Wallet**: Run `generate-wallet` to create a new wallet, or set `PRIVATE_KEY=<64 hex chars>` in `.env` (next to SKILL.md) to import an existing one.
 
 ## Execution
 
@@ -44,6 +53,16 @@ uv run scripts/run.py <command> --help # Command-specific help
 If `uv` is unavailable, replace `uv run` with `python3` — `run.py` will auto-install dependencies via pip.
 
 ## Quick Reference
+
+### Wallet Setup
+
+```bash
+# Check wallet status
+uv run scripts/run.py check-wallet
+
+# Generate a new wallet (saves private key to .env)
+uv run scripts/run.py generate-wallet
+```
 
 ### Address & Balance
 
@@ -130,6 +149,6 @@ Read the `detail` field to decide next steps.
 
 ## Rules
 
-1. Before any private-key operation, verify `.env` exists. Read-only ops (`call`, `list-functions`) don't need it.
+1. If `PRIVATE_KEY` is missing, run `generate-wallet` to create one, or ask the user to import their own. Read-only ops (`call`, `list-functions`) don't need it.
 2. On error, read the `detail` field from stderr JSON to troubleshoot.
 3. Respond in the user's language.
