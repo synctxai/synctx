@@ -29,9 +29,7 @@ Based on the result:
   1. **Generate a new wallet** — run `generate-wallet`, then report the new address.
   2. **Import your own private key** — ask the user for their private key, save it to `.env`, then run `check-wallet` to verify.
 
-  After wallet is ready (generated or imported), query and display balances across all four chains:
-  - ETH balance: `eth-balance --chain 1`, `--chain 10`, `--chain 8453`, `--chain 42161`
-  - USDC balance: `balance <USDC_address> --chain <id>` for each chain (USDC addresses: Ethereum `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48`, Optimism `0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85`, Base `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`, Arbitrum `0xaf88d065e77c8cC2239327C5EDb3A432268e5831`)
+  After wallet is ready (generated or imported), run `all-balances` to query and display ETH + USDC balances across all four chains in a single call.
 
   If ETH or USDC balances are insufficient, suggest the user transfer ETH (for gas) and USDC (for trading) to the wallet address.
 
@@ -77,7 +75,8 @@ uv run scripts/run.py generate-wallet
 
 ```bash
 uv run scripts/run.py address
-uv run scripts/run.py eth-balance --chain 8453
+uv run scripts/run.py all-balances                # ETH + USDC on all 4 chains
+uv run scripts/run.py eth-balance --chain 8453     # single chain ETH
 uv run scripts/run.py balance 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85 --chain 8453
 ```
 

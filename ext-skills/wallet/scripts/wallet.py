@@ -48,6 +48,45 @@ def sign_typed_data(typed_data: dict | str) -> dict:
     return {"address": account.address, "signature": signed.signature.hex(),
             "v": signed.v, "r": hex(signed.r), "s": hex(signed.s)}
 
+# USDC addresses per chain
+USDC = {
+    1:     "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    10:    "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+    8453:  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    42161: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+}
+
+def all_balances() -> dict:
+    """Query ETH and USDC balances across all four chains in parallel."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from abi import call as abi_call
+    account = get_account()
+    owner = account.address
+
+    def _query_chain(chain_id, cfg):
+        w3 = get_w3(chain_id)
+        eth_bal = w3.eth.get_balance(owner)
+        usdc_addr = USDC[chain_id]
+        try:
+            usdc_raw = abi_call(usdc_addr, "balanceOf(address)->(uint256)", [owner], chain_id=chain_id)
+            usdc_formatted = fmt(usdc_raw, 6, "USDC")
+        except Exception:
+            usdc_raw, usdc_formatted = 0, "0 USDC"
+        return cfg["name"], {
+            "chain_id": chain_id,
+            "eth": {"raw": str(eth_bal), "formatted": fmt(eth_bal, 18, cfg["symbol"])},
+            "usdc": {"raw": str(usdc_raw), "formatted": usdc_formatted},
+        }
+
+    results = {"address": owner, "chains": {}}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_query_chain, cid, cfg) for cid, cfg in CHAINS.items()]
+        for f in as_completed(futures):
+            name, data = f.result()
+            results["chains"][name] = data
+    return results
+
+
 # --- Internal transaction helpers (not exposed to agent) ---
 
 def _build_tx(to: str, chain_id: int = 10, value: int = 0, data: bytes | str = b"") -> dict:
