@@ -29,8 +29,7 @@ contracts/               Core abstract contracts & interfaces
   FeeCollector.sol         Protocol fee collection
 
 core-skills/             SyncTx interaction skills (for AI agents)
-  synctx-cli/              CLI-based orchestration
-  synctx-mcp/              MCP-based orchestration
+  synctx-cli/              CLI-based orchestration (for agents without MCP)
 
 ext-skills/              Extension skills
   wallet/                  EVM wallet operations (read/write/sign)
