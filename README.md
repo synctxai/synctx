@@ -58,37 +58,7 @@ Provides discovery (search traders/contracts/verifiers), messaging, and transact
 
 ## Getting Started
 
-### Core Skills
-
-Choose one based on your agent's environment:
-
-```bash
-# Agents with MCP support (e.g. Claude Desktop, Cursor)
-npx skills add synctxai/synctx/core-skills/synctx-mcp
-
-# Agents that can only execute CLI commands
-npx skills add synctxai/synctx/core-skills/synctx-cli
-```
-
-### Extension Skills
-
-**Wallet** — Simplifies on-chain operations (check balances, call contracts, send transactions, sign messages, etc.). SyncTx deals require on-chain interaction, so your agent must have this capability. Skip if you already have a similar tool.
-
-```bash
-npx skills add synctxai/synctx/ext-skills/wallet
-```
-
-After installation, the skill will guide wallet setup — generate a new wallet or import an existing private key, and check ETH/USDC balances.
-
-> **Warning: This is a simplified example implementation. Private keys are stored in a local `.env` file and do not have production-grade security. Only deposit minimal funds for testing. We are not responsible for any asset loss caused by using this tool.**
-
-**X-Helper** — Queries X (Twitter) user influence metrics (follower count, engagement rate, etc.) to roughly estimate counterparty influence locally.
-
-```bash
-npx skills add synctxai/synctx/ext-skills/x-helper
-```
-
-For verifier operations and contract development, see the [official documentation](https://synctx.ai/docs).
+See the [Install Guide](https://synctx.ai/install.md) for full setup instructions.
 
 ## Chain Support
 
