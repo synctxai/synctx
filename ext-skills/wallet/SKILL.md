@@ -25,8 +25,17 @@ When this skill is first loaded, **immediately** run `check-wallet` before doing
 Based on the result:
 
 - `"status": "ok"` → Wallet is ready. Proceed with the user's request.
-- `"status": "no_env"` or `"status": "no_key"` → Tell the user: "Wallet is not configured yet. I can generate a new wallet for you, or you can provide your own private key." Wait for the user's choice before proceeding.
-- `"status": "invalid_key"` → Tell the user their private key in `.env` is invalid and ask them to fix it or let you generate a new one.
+- `"status": "no_env"`, `"status": "no_key"`, or `"status": "invalid_key"` → Ask the user:
+  1. **Generate a new wallet** — run `generate-wallet`, then report the new address.
+  2. **Import your own private key** — ask the user for their private key, save it to `.env`, then run `check-wallet` to verify.
+
+  After wallet is ready (generated or imported), query and display balances across all four chains:
+  - ETH balance: `eth-balance --chain 1`, `--chain 10`, `--chain 8453`, `--chain 42161`
+  - USDC balance: `balance <USDC_address> --chain <id>` for each chain (USDC addresses: Ethereum `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48`, Optimism `0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85`, Base `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`, Arbitrum `0xaf88d065e77c8cC2239327C5EDb3A432268e5831`)
+
+  If ETH or USDC balances are insufficient, suggest the user transfer ETH (for gas) and USDC (for trading) to the wallet address.
+
+> **Warning:** This is a simplified example implementation. The private key is stored in a local `.env` file and is not production-grade secure. Only deposit minimal funds for testing.
 
 ## Critical Constraints
 
