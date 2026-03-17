@@ -1,35 +1,40 @@
 ---
 name: x-helper
-description: Query Twitter user influence metrics — follower count, engagement rate, average replies
+description: Query Twitter user profile and tweet data — no API key required
 metadata:
   author: synctxai
-  version: "1.0"
+  version: "2.0"
 ---
 
 # X-Helper Skill
 
-- Queries public Twitter user data via `twitterapi.io`
+- Queries public Twitter data via free APIs (no API key needed)
+  - Profile: [fxtwitter](https://api.fxtwitter.com)
+  - Tweet: [vxtwitter](https://api.vxtwitter.com)
 - Used to evaluate counterparty influence during XQuoteDeal negotiation
-- Configuration: `TWITTER_API_KEY` in `.env` (next to SKILL.md). If `.env` does not exist, copy `.env.example` and fill in the API key
 - Pure function library in `scripts/x_helper.py`, invoked via `python3 -c`
 
 ## Functions
 
 ### x_helper.py
 
-- `lookup(username, tweet_limit=20)` -> `{"username", "followers", "engagement_rate", "avg_replies"}`
+- `lookup(username)` -> `{"username", "followers", "following", "tweets", "likes", "description"}`
   - `username`: Twitter username (without @)
-  - `tweet_limit`: max number of original tweets used to calculate engagement rate, default 20
-  - `followers`: follower count
-  - `engagement_rate`: engagement rate = average engagements / followers
-  - `avg_replies`: average replies per tweet
 
-- `has_quoted(username, target_tweet_id, max_pages=3)` -> `{"username", "target_tweet_id", "quoted": bool, "quote_tweet_id": str | None}`
-  - `username`: Twitter username (without @)
-  - `target_tweet_id`: target tweet ID
-  - `max_pages`: max number of pages to traverse, default 3
-  - `quoted`: whether the user has quoted the target tweet
-  - `quote_tweet_id`: ID of the quote tweet (None if not found)
+- `get_tweet(tweet_id, username="i")` -> `{"tweet_id", "username", "text", "likes", "retweets", "replies", "quote": {...} | None}`
+  - `tweet_id`: tweet ID
+  - `quote`: nested object `{"tweet_id", "username", "text"}` if this tweet quotes another, else None
+
+- `has_quoted(username, target_tweet_id, quote_tweet_id)` -> `{"username", "target_tweet_id", "quoted": bool, "quote_tweet_id": str | None}`
+  - `username`: expected quote author (without @)
+  - `target_tweet_id`: the tweet that should be quoted
+  - `quote_tweet_id`: the tweet claimed to be the quote
+
+## Limitations
+
+- No timeline endpoint available — cannot list a user's recent tweets
+- `engagement_rate` calculation not supported (requires recent tweet list)
+- `has_quoted` requires the caller to supply the `quote_tweet_id` (cannot scan timeline)
 
 ## Examples
 
@@ -42,8 +47,15 @@ print(lookup('elonmusk'))
 
 ```bash
 cd <path-to-this-skill>/scripts && python3 -c "
+from x_helper import get_tweet
+print(get_tweet('20'))
+"
+```
+
+```bash
+cd <path-to-this-skill>/scripts && python3 -c "
 from x_helper import has_quoted
-print(has_quoted('elonmusk', '1234567890'))
+print(has_quoted('somequoter', '1234567890', '9876543210'))
 "
 ```
 

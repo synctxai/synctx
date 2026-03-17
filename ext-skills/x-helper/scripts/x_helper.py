@@ -1,142 +1,184 @@
-"""Query Twitter user influence metrics (follower count, engagement rate, average replies)."""
+"""Query Twitter user profile and tweet data via free public APIs.
 
-import os
-from pathlib import Path
+Primary:  fxtwitter  (api.fxtwitter.com)
+Fallback: vxtwitter  (api.vxtwitter.com)
+
+No API key required.
+"""
+from __future__ import annotations
 
 import httpx
-from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-API_KEY = os.environ.get("TWITTER_API_KEY", "")
-
-BASE_URL = "https://api.twitterapi.io"
+FXTWITTER = "https://api.fxtwitter.com"
+VXTWITTER = "https://api.vxtwitter.com"
 TIMEOUT = 15
+HEADERS = {"User-Agent": "x-helper/2.0"}
 
 
-def lookup(username: str, tweet_limit: int = 20) -> dict:
-    """
-    Query influence data for the specified user.
+# ---------------------------------------------------------------------------
+# Internal: provider-specific fetchers
+# ---------------------------------------------------------------------------
 
-    Args:
-        username: Twitter username (without @)
-        tweet_limit: max number of tweets used to calculate engagement rate
-
-    Returns:
-        {"username", "followers", "engagement_rate", "avg_replies"}
-    """
-    headers = {"X-API-Key": API_KEY}
-
-    with httpx.Client(headers=headers, timeout=TIMEOUT) as client:
-        # 1. User info
-        resp = client.get(f"{BASE_URL}/twitter/user/info", params={"userName": username})
-        resp.raise_for_status()
-        user_data = resp.json()
-        user = user_data.get("data") or user_data
-        followers = (
-            user.get("followers")
-            or user.get("followers_count")
-            or user.get("followersCount")
-            or 0
-        )
-
-        if not followers:
-            return {"username": username, "followers": 0, "engagement_rate": 0.0, "avg_replies": 0.0}
-
-        # 2. Recent tweets
-        resp = client.get(
-            f"{BASE_URL}/twitter/user/last_tweets",
-            params={"userName": username, "cursor": ""},
-        )
-        resp.raise_for_status()
-        tweet_data = resp.json()
-        all_tweets = (
-            (tweet_data.get("data") or {}).get("tweets")
-            or tweet_data.get("tweets")
-            or []
-        )
-        original = [t for t in all_tweets if not t.get("retweeted_tweet")][:tweet_limit]
-
-        if not original:
-            return {"username": username, "followers": followers, "engagement_rate": 0.0, "avg_replies": 0.0}
-
-        total_eng = sum(
-            (t.get("likeCount") or t.get("favorite_count") or 0)
-            + (t.get("retweetCount") or t.get("retweet_count") or 0)
-            + (t.get("replyCount") or t.get("reply_count") or 0)
-            for t in original
-        )
-        total_replies = sum(
-            t.get("replyCount") or t.get("reply_count") or 0
-            for t in original
-        )
-        avg_eng = total_eng / len(original)
-        avg_replies = total_replies / len(original)
-        engagement_rate = avg_eng / followers
-
+def _lookup_fx(client: httpx.Client, username: str) -> dict:
+    resp = client.get(f"{FXTWITTER}/{username}")
+    resp.raise_for_status()
+    user = resp.json().get("user") or {}
     return {
-        "username": username,
-        "followers": followers,
-        "engagement_rate": round(engagement_rate, 6),
-        "avg_replies": round(avg_replies, 2),
+        "username": user.get("screen_name", username),
+        "followers": user.get("followers", 0),
+        "following": user.get("following", 0),
+        "tweets": user.get("tweets", 0),
+        "likes": user.get("likes", 0),
+        "description": user.get("description", ""),
     }
 
 
-def has_quoted(username: str, target_tweet_id: str, max_pages: int = 3) -> dict:
-    """
-    Check whether the specified user has quoted a given tweet.
+def _lookup_vx(client: httpx.Client, username: str) -> dict:
+    resp = client.get(f"{VXTWITTER}/{username}")
+    resp.raise_for_status()
+    data = resp.json()
+    return {
+        "username": data.get("screen_name", username),
+        "followers": data.get("followers_count", 0),
+        "following": data.get("following_count", 0),
+        "tweets": data.get("tweet_count", 0),
+        "likes": 0,
+        "description": data.get("description", ""),
+    }
 
-    Traverses the user's recent tweet timeline to find any quote of the target tweet.
+
+def _parse_quote_fx(tweet: dict) -> dict | None:
+    qt = tweet.get("quote")
+    if isinstance(qt, dict) and qt.get("id"):
+        return {
+            "tweet_id": qt["id"],
+            "username": (qt.get("author") or {}).get("screen_name", ""),
+            "text": qt.get("text", ""),
+        }
+    return None
+
+
+def _parse_quote_vx(data: dict) -> dict | None:
+    qt = data.get("qrt")
+    if isinstance(qt, dict) and qt.get("tweetID"):
+        return {
+            "tweet_id": qt["tweetID"],
+            "username": qt.get("user_screen_name", ""),
+            "text": qt.get("text", ""),
+        }
+    return None
+
+
+def _get_tweet_fx(client: httpx.Client, tweet_id: str) -> dict:
+    resp = client.get(f"{FXTWITTER}/i/status/{tweet_id}")
+    resp.raise_for_status()
+    tweet = resp.json().get("tweet") or {}
+    return {
+        "tweet_id": tweet.get("id", tweet_id),
+        "username": (tweet.get("author") or {}).get("screen_name", ""),
+        "text": tweet.get("text", ""),
+        "likes": tweet.get("likes", 0),
+        "retweets": tweet.get("retweets", 0),
+        "replies": tweet.get("replies", 0),
+        "quote": _parse_quote_fx(tweet),
+    }
+
+
+def _get_tweet_vx(client: httpx.Client, tweet_id: str) -> dict:
+    resp = client.get(f"{VXTWITTER}/i/status/{tweet_id}")
+    resp.raise_for_status()
+    data = resp.json()
+    return {
+        "tweet_id": data.get("tweetID", tweet_id),
+        "username": data.get("user_screen_name", ""),
+        "text": data.get("text", ""),
+        "likes": data.get("likes", 0),
+        "retweets": data.get("retweets", 0),
+        "replies": data.get("replies", 0),
+        "quote": _parse_quote_vx(data),
+    }
+
+
+def _try_with_fallback(primary, fallback, *args):
+    """Call *primary*; on any network / HTTP error fall back to *fallback*."""
+    try:
+        return primary(*args)
+    except (httpx.HTTPStatusError, httpx.TransportError):
+        return fallback(*args)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def lookup(username: str) -> dict:
+    """
+    Query profile data for the specified user.
 
     Args:
         username: Twitter username (without @)
-        target_tweet_id: target tweet ID
-        max_pages: max number of pages to traverse, default 3
+
+    Returns:
+        {"username", "followers", "following", "tweets", "likes", "description"}
+    """
+    username = username.lstrip("@")
+    with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as client:
+        return _try_with_fallback(_lookup_fx, _lookup_vx, client, username)
+
+
+def get_tweet(tweet_id: str, username: str = "i") -> dict:
+    """
+    Fetch a single tweet by ID.
+
+    Args:
+        tweet_id: tweet ID
+        username: tweet author username (ignored by API, default "i")
+
+    Returns:
+        {"tweet_id", "username", "text", "likes", "retweets", "replies",
+         "quote": {...} | None}
+    """
+    with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as client:
+        return _try_with_fallback(_get_tweet_fx, _get_tweet_vx, client, tweet_id)
+
+
+def has_quoted(username: str, target_tweet_id: str, quote_tweet_id: str) -> dict:
+    """
+    Verify that a specific tweet is a quote of the target tweet.
+
+    Args:
+        username: expected quote author (without @)
+        target_tweet_id: the tweet that should be quoted
+        quote_tweet_id: the tweet claimed to be the quote
 
     Returns:
         {"username", "target_tweet_id", "quoted": bool, "quote_tweet_id": str | None}
     """
-    headers = {"X-API-Key": API_KEY}
+    username = username.lstrip("@")
     target_id = str(target_tweet_id)
+    quote_id = str(quote_tweet_id)
 
-    with httpx.Client(headers=headers, timeout=TIMEOUT) as client:
-        cursor = ""
-        for _ in range(max_pages):
-            resp = client.get(
-                f"{BASE_URL}/twitter/user/last_tweets",
-                params={"userName": username, "cursor": cursor},
-            )
-            resp.raise_for_status()
-            tweet_data = resp.json()
+    try:
+        tweet = get_tweet(quote_id)
+    except (httpx.HTTPStatusError, httpx.TransportError):
+        return {
+            "username": username,
+            "target_tweet_id": target_id,
+            "quoted": False,
+            "quote_tweet_id": None,
+        }
 
-            data = tweet_data.get("data") or tweet_data
-            tweets = data.get("tweets") or []
-            if not tweets:
-                break
-
-            for t in tweets:
-                qt = t.get("quoted_tweet")
-                if isinstance(qt, dict) and qt.get("id") == target_id:
-                    return {
-                        "username": username,
-                        "target_tweet_id": target_id,
-                        "quoted": True,
-                        "quote_tweet_id": t.get("id"),
-                    }
-
-            cursor = (
-                data.get("next_cursor")
-                or tweet_data.get("next_cursor")
-                or ""
-            )
-            if not cursor:
-                break
+    quoted = (
+        tweet.get("username", "").lower() == username.lower()
+        and tweet.get("quote") is not None
+        and str(tweet["quote"].get("tweet_id")) == target_id
+    )
 
     return {
         "username": username,
         "target_tweet_id": target_id,
-        "quoted": False,
-        "quote_tweet_id": None,
+        "quoted": quoted,
+        "quote_tweet_id": quote_id if quoted else None,
     }
 
 
