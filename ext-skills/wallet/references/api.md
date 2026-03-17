@@ -52,7 +52,7 @@ Automatic argument type conversion:
 All CLI commands output JSON to stdout; diagnostics go to stderr.
 
 Common options:
-- `--chain <id>` — Chain ID, default 10 (Optimism)
+- `--chain <id>` — Chain ID. **Always use `--chain 8453` (Base) unless the user specifies another chain.** CLI code default is 10 but the project default is Base 8453.
 - `--args '<json_array>'` — Function arguments as JSON array, e.g. `'["0x...", "1000"]'`
 - `--dry-run` — Estimate gas only, do not execute (`invoke` command only)
 - `--help` — Show command help

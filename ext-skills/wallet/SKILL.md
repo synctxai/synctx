@@ -17,7 +17,7 @@ metadata:
 
 # Wallet Skill
 
-Multi-chain EVM wallet: Optimism (10, default), Ethereum (1), Base (8453), Arbitrum (42161).
+Multi-chain EVM wallet: Base (8453, default), Optimism (10), Ethereum (1), Arbitrum (42161). Always pass `--chain 8453` (or omit for Base) unless the user specifies another chain.
 
 ## On Load
 
@@ -68,8 +68,8 @@ uv run scripts/run.py generate-wallet
 
 ```bash
 uv run scripts/run.py address
-uv run scripts/run.py eth-balance --chain 10
-uv run scripts/run.py balance 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85 --chain 10
+uv run scripts/run.py eth-balance --chain 8453
+uv run scripts/run.py balance 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85 --chain 8453
 ```
 
 ### Contract Read
@@ -79,28 +79,28 @@ uv run scripts/run.py balance 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85 --chain
 uv run scripts/run.py list-functions 0x...contract...
 
 # Call read function (use sig from list-functions output)
-uv run scripts/run.py call 0x...contract... "balanceOf(address)->(uint256)" --args '["0x...addr..."]' --chain 10
+uv run scripts/run.py call 0x...contract... "balanceOf(address)->(uint256)" --args '["0x...addr..."]' --chain 8453
 
 # msg.sender-dependent functions:
-uv run scripts/run.py call 0x...contract... "dealStatus(uint256)->(uint8)" --args '["3"]' --chain 10 --from 0x...your_addr...
+uv run scripts/run.py call 0x...contract... "dealStatus(uint256)->(uint8)" --args '["3"]' --chain 8453 --from 0x...your_addr...
 ```
 
 ### Contract Write
 
 ```bash
 # Dry run (estimate gas, show details, no execution)
-uv run scripts/run.py invoke 0x...contract... "accept(uint256)" --args '["3"]' --chain 10 --dry-run
+uv run scripts/run.py invoke 0x...contract... "accept(uint256)" --args '["3"]' --chain 8453 --dry-run
 
 # Execute
-uv run scripts/run.py invoke 0x...contract... "accept(uint256)" --args '["3"]' --chain 10
+uv run scripts/run.py invoke 0x...contract... "accept(uint256)" --args '["3"]' --chain 8453
 ```
 
 ### ERC20 Operations
 
 ```bash
-uv run scripts/run.py balance 0x...token... --chain 10
-uv run scripts/run.py approve 0x...token... 0x...spender... 1000000 --chain 10
-uv run scripts/run.py approve-and-invoke 0x...token... 0x...contract... 1000000 "createDeal(...)" --args '[...]' --chain 10
+uv run scripts/run.py balance 0x...token... --chain 8453
+uv run scripts/run.py approve 0x...token... 0x...spender... 1000000 --chain 8453
+uv run scripts/run.py approve-and-invoke 0x...token... 0x...contract... 1000000 "createDeal(...)" --args '[...]' --chain 8453
 ```
 
 ### Signing
@@ -113,7 +113,7 @@ uv run scripts/run.py sign-typed-data '{"types":...}'
 ### Event Logs
 
 ```bash
-uv run scripts/run.py decode-logs 0x...tx_hash... 0x...contract... --chain 10
+uv run scripts/run.py decode-logs 0x...tx_hash... 0x...contract... --chain 8453
 ```
 
 ## Workflow: Unknown Contract Interaction
