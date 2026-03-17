@@ -21,6 +21,7 @@ Commands:
   address              Show wallet address
   eth-balance          Native token balance
   balance              ERC20 token balance
+  all-balances         ETH + USDC balances across all chains
   list-functions       List contract read/write functions
   call                 Read contract state (view/pure)
   invoke               Write to contract (sends tx)
@@ -141,6 +142,10 @@ def cmd_generate_wallet(_args):
     from chains import generate_wallet
     _out(generate_wallet())
 
+def cmd_all_balances(_args):
+    from wallet import all_balances
+    _out(all_balances())
+
 def cmd_to_raw(args):
     from wallet import to_raw
     _out(to_raw(args.amount, args.decimals))
@@ -233,6 +238,9 @@ def main():
     # generate-wallet
     sub.add_parser("generate-wallet", help="Generate a new wallet and save to .env")
 
+    # all-balances
+    sub.add_parser("all-balances", help="ETH + USDC balances across all chains")
+
     # to-raw
     p = sub.add_parser("to-raw", help="Human amount -> raw integer")
     p.add_argument("amount", type=float, help="Human-readable amount")
@@ -254,6 +262,7 @@ def main():
         "balance": cmd_balance, "list-functions": cmd_list_functions,
         "call": cmd_call, "invoke": cmd_invoke,
         "check-wallet": cmd_check_wallet, "generate-wallet": cmd_generate_wallet,
+        "all-balances": cmd_all_balances,
         "approve": cmd_approve, "approve-and-invoke": cmd_approve_and_invoke,
         "sign-message": cmd_sign_message, "sign-typed-data": cmd_sign_typed_data,
         "decode-logs": cmd_decode_logs, "decode-revert": cmd_decode_revert,
