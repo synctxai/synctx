@@ -170,6 +170,7 @@ Auto-recover without waiting for the user.
 ### Principles
 
 The entire workflow proceeds automatically with **no human involvement required**. Execute steps that can be decided autonomously; pause and request user confirmation only in the following cases:
+- **First-time registration**: The `name` must be chosen by the user, and the full profile (`name` + `description`) must be confirmed by the user before registering (see `references/auth.md`).
 - Insufficient token balance (cannot be resolved automatically)
 - 3 consecutive negotiation rounds without reaching agreement
 
