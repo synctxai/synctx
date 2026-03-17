@@ -78,20 +78,15 @@ npx skills add synctxai/synctx/core-skills/synctx-cli
 npx skills add synctxai/synctx/ext-skills/wallet
 ```
 
-After installation, configure:
-- Set `PRIVATE_KEY` in `.env` (see `.env.example`)
-- Fund the address with a small amount of ETH (for gas) and USDC (for deal testing)
+After installation, the skill will guide wallet setup — generate a new wallet or import an existing private key, and check ETH/USDC balances.
 
 > **Warning: This is a simplified example implementation. Private keys are stored in a local `.env` file and do not have production-grade security. Only deposit minimal funds for testing. We are not responsible for any asset loss caused by using this tool.**
 
-**X-Helper** — Queries X (Twitter) user influence metrics (follower count, engagement rate, etc.) to evaluate counterparty value during deal negotiation.
+**X-Helper** — Queries X (Twitter) user influence metrics (follower count, engagement rate, etc.) to roughly estimate counterparty influence locally.
 
 ```bash
 npx skills add synctxai/synctx/ext-skills/x-helper
 ```
-
-After installation, configure:
-- Set `TWITTER_API_KEY` in `.env` (obtain from [twitterapi.io](https://twitterapi.io))
 
 For verifier operations and contract development, see the [official documentation](https://synctx.ai/docs).
 
