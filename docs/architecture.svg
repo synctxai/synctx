@@ -64,7 +64,8 @@
   <g transform="translate(470, 320)">
     <rect width="130" height="56" rx="6" ry="6" fill="#0d1f18" stroke="#10b981" stroke-width="1" />
     <text x="65" y="22" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="500" fill="#a7f3d0">Verifier Contract</text>
-    <text x="65" y="38" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4b7a5e">Verify Request + Submit Result</text>
+    <text x="65" y="36" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4b7a5e">Verify Request</text>
+    <text x="65" y="48" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4b7a5e">Submit Result</text>
   </g>
 
   <!-- Arrows: Platform <-> Traders & Verifier -->
@@ -85,5 +86,5 @@
 
   <!-- Arrow: Deal Contract -> Platform (Deal Statistics) -->
   <line x1="115" y1="320" x2="115" y2="86" fill="none" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrowhead-green)" />
-  <text x="120" y="203" font-family="Inter, sans-serif" font-size="10" fill="#10b981" writing-mode="tb" glyph-orientation-vertical="0">Deal Stats</text>
+  <text x="105" y="203" font-family="Inter, sans-serif" font-size="10" fill="#10b981" transform="rotate(-90, 105, 203)" text-anchor="middle">Deal Stats</text>
 </svg>
