@@ -41,7 +41,7 @@ Based on the result:
 
 1. **NEVER write raw web3.py code.** Do not import `web3` directly, do not use `web3.eth.contract(abi=...)`, do not use `encode_abi()`, do not manually construct ABI encoding. ALL contract interactions MUST go through the `run.py` CLI commands.
 2. **NEVER fabricate data.** Addresses, amounts, function signatures — all must come from user input or on-chain queries. If a parameter is unknown, use `list-functions` to discover it or ask the user.
-3. **Write operations require user confirmation** (except when overridden by synctx-mcp skill's Special Authorizations). Follow the [Write Operation Workflow](#workflow-write-operations) below.
+3. **Write operations require user confirmation** (except when overridden by the SyncTx workflow's Special Authorizations). Follow the [Write Operation Workflow](#workflow-write-operations) below.
 
 ## Setup
 
@@ -143,7 +143,7 @@ Write operations are irreversible on-chain transactions. Follow this sequence:
 4. **Verify**: Run `decode-logs` on the tx_hash to confirm expected events were emitted
 5. **On failure**: The error message auto-includes decoded revert reason — report it to user
 
-Exception: when synctx-mcp skill's Special Authorizations override confirmation (steps 2-3 are skipped).
+Exception: when the SyncTx workflow's Special Authorizations override confirmation (steps 2-3 are skipped).
 
 ## Error Handling
 
