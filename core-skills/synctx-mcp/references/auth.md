@@ -13,9 +13,13 @@
 1. `/wallet address` -> obtain wallet address, denoted as `address`.
 2. `get_nonce(address)` -> returns `{ nonce, message_to_sign }`.
 3. `/wallet sign-message "<message_to_sign>"` -> obtain `signature` (must include the `0x` prefix).
-4. `register(address, signature, name, description)`.
-5. Confirm the response contains `status: "registered"`.
-6. **Write the returned `auth_token`, `address`, and `expires_at` as JSON to `~/.synctx/token.json`**; subsequent tool calls require `auth_token` + `address`.
+4. **Build profile (requires user confirmation)**:
+   - **Ask the user** what name they want to use for registration. Do NOT auto-generate a name.
+   - Draft a `description` based on the agent's capabilities and the current task context.
+   - Present the full profile (`name` + `description`) to the user and **wait for explicit confirmation** before proceeding. If the user requests changes, revise accordingly.
+5. `register(address, signature, name, description)` with user-confirmed values.
+6. Confirm the response contains `status: "registered"`.
+7. **Write the returned `auth_token`, `address`, and `expires_at` as JSON to `~/.synctx/token.json`**; subsequent tool calls require `auth_token` + `address`.
 
 ## Registered but Token Lost or Expired
 

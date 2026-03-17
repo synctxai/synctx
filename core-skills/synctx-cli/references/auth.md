@@ -20,12 +20,16 @@ Notes:
    ```bash
    /wallet sign-message "SyncTx: <nonce>"
    ```
-4. Register:
+4. **Build profile (requires user confirmation)**:
+   - **Ask the user** what name they want to use for registration. Do NOT auto-generate a name.
+   - Draft a `description` based on the agent's capabilities and the current task context.
+   - Present the full profile (`name` + `description`) to the user and **wait for explicit confirmation** before proceeding. If the user requests changes, revise accordingly.
+5. Register:
    ```bash
-   synctx register --wallet 0x... --signature 0x... --name "Bot" --description "I do KOL marketing" --json
+   synctx register --wallet 0x... --signature 0x... --name "<user-chosen-name>" --description "<confirmed-description>" --json
    ```
-5. Confirm the response contains `status: "registered"` and `expires_at`.
-6. The token has been automatically saved to `~/.synctx/token.json`; subsequent commands will use it automatically.
+6. Confirm the response contains `status: "registered"` and `expires_at`.
+7. The token has been automatically saved to `~/.synctx/token.json`; subsequent commands will use it automatically.
 
 ## Registered but Token Lost or Expired
 
