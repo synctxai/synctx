@@ -197,12 +197,14 @@ contract XQuoteDealContract is DealContractBase {
         address verifier,
         uint96  verifierFee,
         uint256 deadline,
+        bytes32 nonce,
         bytes calldata sig,
         string calldata tweet_id,
         string calldata quoter_username
     ) external returns (uint256 dealIndex) {
         // --- Validation ---
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
+        if (grossAmount - PROTOCOL_FEE < verifierFee) revert FeeTooLow();
         if (partyB == address(0)) revert InvalidParams();
         if (msg.sender == partyB) revert InvalidParams();
 
@@ -215,7 +217,10 @@ contract XQuoteDealContract is DealContractBase {
         string memory canonicalUsername = _canonicalizeUsername(quoter_username);
         if (bytes(tweet_id).length == 0 || bytes(canonicalUsername).length == 0) revert InvalidParams();
 
-        _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, sig);
+        _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, nonce, sig);
+
+        // Consume nonce on verifier — prevents signature replay
+        IVerifier(verifier).consumeNonce(nonce);
 
         // --- Transfer ---
         if (!IUSDC(USDC).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
@@ -377,11 +382,7 @@ contract XQuoteDealContract is DealContractBase {
         d.verificationRequested = false;
         d.verificationTimestamp = 0;
 
-        // Pay escrowed verification fee to verifier
         uint96 vFee = d.verifierFee;
-        if (vFee > 0) {
-            if (!IUSDC(USDC).transfer(msg.sender, vFee)) revert TransferFailed();
-        }
 
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
@@ -390,10 +391,14 @@ contract XQuoteDealContract is DealContractBase {
             uint96 amt = d.amount;
             d.amount = 0;
             d.state = uint8(State.Completed);
-            if (!IUSDC(USDC).transfer(d.partyB, amt)) revert TransferFailed();
             emit DealCompleted(dealIndex, amt);
             _emitStateChanged(dealIndex, uint8(State.Completed));
             _recordEnd(dealIndex);
+            // Interactions last (CEI): pay verifier fee, then reward to B
+            if (vFee > 0) {
+                if (!IUSDC(USDC).transfer(msg.sender, vFee)) revert TransferFailed();
+            }
+            if (!IUSDC(USDC).transfer(d.partyB, amt)) revert TransferFailed();
         } else if (result < 0) {
             // Verification failed → B violated
             d.state = uint8(State.Violated);
@@ -401,12 +406,20 @@ contract XQuoteDealContract is DealContractBase {
             _emitViolated(dealIndex, d.partyB);
             _emitStateChanged(dealIndex, uint8(State.Violated));
             _recordDispute(dealIndex);
+            // Interactions last (CEI): pay verifier fee
+            if (vFee > 0) {
+                if (!IUSDC(USDC).transfer(msg.sender, vFee)) revert TransferFailed();
+            }
         } else {
             // result == 0 → inconclusive, enter Settling
             d.state = uint8(State.Settling);
             d.stageTimestamp = uint48(block.timestamp);
             _emitStateChanged(dealIndex, uint8(State.Settling));
             emit SettlingStarted(dealIndex);
+            // Interactions last (CEI): pay verifier fee
+            if (vFee > 0) {
+                if (!IUSDC(USDC).transfer(msg.sender, vFee)) revert TransferFailed();
+            }
         }
     }
 
@@ -431,19 +444,19 @@ contract XQuoteDealContract is DealContractBase {
         d.verificationRequested = false;
         d.verificationTimestamp = 0;
 
-        // Refund escrowed verification fee to requester
-        uint96 vFee = d.verifierFee;
-        if (vFee > 0) {
-            if (!IUSDC(USDC).transfer(requester, vFee)) revert TransferFailed();
-        }
-
-        // Enter settling mode
+        // Enter settling mode (effects before interactions)
         d.state = uint8(State.Settling);
         d.stageTimestamp = uint48(block.timestamp);
 
         emit VerificationReset(dealIndex, verificationIndex, d.verifier);
         emit SettlingStarted(dealIndex);
         _emitStateChanged(dealIndex, uint8(State.Settling));
+
+        // Interactions last (CEI): refund escrowed verification fee to requester
+        uint96 vFee = d.verifierFee;
+        if (vFee > 0) {
+            if (!IUSDC(USDC).transfer(requester, vFee)) revert TransferFailed();
+        }
     }
 
     // ===================== Settlement =====================
@@ -578,11 +591,12 @@ contract XQuoteDealContract is DealContractBase {
         string memory canonicalUsername,
         uint96 fee,
         uint256 deadline,
+        bytes32 nonce,
         bytes calldata sig
     ) internal view {
         address verifierSpec = IVerifier(verifier).spec();
         if (verifierSpec != REQUIRED_SPEC) revert InvalidSpecAddress();
-        if (!XQuoteVerifierSpec(verifierSpec).check(verifier, tweet_id, canonicalUsername, uint256(fee), deadline, sig))
+        if (!XQuoteVerifierSpec(verifierSpec).check(verifier, tweet_id, canonicalUsername, uint256(fee), deadline, nonce, sig))
             revert InvalidVerifierSign();
     }
 

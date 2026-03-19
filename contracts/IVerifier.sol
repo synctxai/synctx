@@ -31,6 +31,12 @@ interface IVerifier {
     /// @notice EIP-712 domain separator (public for Spec's check() to read)
     function DOMAIN_SEPARATOR() external view returns (bytes32);
 
+    /// @notice Consume a signature nonce to prevent replay
+    function consumeNonce(bytes32 nonce) external;
+
+    /// @notice Check if a nonce has been used
+    function usedNonces(bytes32 nonce) external view returns (bool);
+
     /// @notice ERC-165 interface detection
     function supportsInterface(bytes4 interfaceId) external pure returns (bool);
 }

@@ -39,6 +39,9 @@ abstract contract VerifierBase is IVerifier {
 
     address public override owner;
 
+    /// @notice Tracks consumed signature nonces (nonce => used)
+    mapping(bytes32 => bool) public usedNonces;
+
     // ============ Modifiers ============
 
     modifier onlyOwner() {
@@ -110,6 +113,17 @@ abstract contract VerifierBase is IVerifier {
     function supportsInterface(bytes4 interfaceId) external pure virtual override returns (bool) {
         return interfaceId == type(IVerifier).interfaceId
             || interfaceId == _IERC165_ID;
+    }
+
+    // ============ Nonce Management ============
+
+    error NonceAlreadyUsed();
+
+    /// @notice Consume a signature nonce (callable by any contract during createDeal)
+    /// @dev Called by DealContract via check flow to ensure one-time use
+    function consumeNonce(bytes32 nonce) external {
+        if (usedNonces[nonce]) revert NonceAlreadyUsed();
+        usedNonces[nonce] = true;
     }
 
     // ============ Fee Withdrawal ============

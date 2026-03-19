@@ -23,7 +23,7 @@ contract XQuoteVerifierSpec is IVerifierSpec {
     // ============ Constants ============
 
     bytes32 public constant VERIFY_TYPEHASH = keccak256(
-        "Verify(string tweetId,string quoterUsername,uint256 fee,uint256 deadline)"
+        "Verify(string tweetId,string quoterUsername,uint256 fee,uint256 deadline,bytes32 nonce)"
     );
 
     // ============ IVerifierSpec Implementation ============
@@ -60,6 +60,7 @@ contract XQuoteVerifierSpec is IVerifierSpec {
         string calldata quoter_username,
         uint256 fee,
         uint256 deadline,
+        bytes32 nonce,
         bytes calldata sig
     ) external view returns (bool) {
         if (block.timestamp > deadline) revert SignatureExpired();
@@ -69,7 +70,8 @@ contract XQuoteVerifierSpec is IVerifierSpec {
             keccak256(bytes(tweet_id)),
             keccak256(bytes(quoter_username)),
             fee,
-            deadline
+            deadline,
+            nonce
         ));
 
         bytes32 domainSeparator = IVerifier(verifierInstance).DOMAIN_SEPARATOR();
