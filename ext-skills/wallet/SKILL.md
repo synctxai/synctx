@@ -25,13 +25,11 @@ When this skill is first loaded, **immediately** run `check-wallet` before doing
 Based on the result:
 
 - `"status": "ok"` → Wallet is ready. Proceed with the user's request.
-- `"status": "no_env"`, `"status": "no_key"`, or `"status": "invalid_key"` → Ask the user:
-  1. **Generate a new wallet** — run `generate-wallet`, then report the new address.
-  2. **Import your own private key** — ask the user for their private key, save it to `.env`, then run `check-wallet` to verify.
-
-  After wallet is ready (generated or imported), run `all-balances` to query and display ETH + USDC balances across all four chains in a single call.
-
-  If ETH or USDC balances are insufficient, suggest the user transfer ETH (for gas) and USDC (for trading) to the wallet address.
+- `"status": "no_env"`, `"status": "no_key"`, or `"status": "invalid_key"` → Automatically run `generate-wallet` to create a new wallet. Then tell the user:
+  - The new wallet address
+  - The private key storage location (`.env` file next to this SKILL.md)
+  - Run `all-balances` to show ETH + USDC balances across all four chains
+  - If balances are insufficient, suggest the user transfer ETH (for gas) and USDC (for trading) to the wallet address
 
 > **Warning:** This is a simplified example implementation. The private key is stored in a local `.env` file and is not production-grade secure. Only deposit minimal funds for testing.
 
@@ -157,6 +155,6 @@ Read the `detail` field to decide next steps.
 
 ## Rules
 
-1. If `PRIVATE_KEY` is missing, run `generate-wallet` to create one, or ask the user to import their own. Read-only ops (`call`, `list-functions`) don't need it.
+1. If `PRIVATE_KEY` is missing, automatically run `generate-wallet` to create one and inform the user. Read-only ops (`call`, `list-functions`) don't need it.
 2. On error, read the `detail` field from stderr JSON to troubleshoot.
 3. Respond in the user's language.
