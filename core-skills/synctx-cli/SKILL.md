@@ -147,6 +147,16 @@ Each stage has timeout protection (`STAGE_TIMEOUT = 30 min`, `VERIFICATION_TIMEO
 - **Verification notification**: After completing `requestVerification`, you **must** call `synctx notify-verifier`.
 - **Completion notification**: After the initiator confirms the deal is completed (Completed), you **must** notify the counterparty via `synctx send-message` that the deal is finished, to prevent the counterparty from continuously polling.
 - **Early termination notification**: When a deal ends early for any reason (Cancelled, Violated, Ended, or other non-Completed terminal states), the acting party **must** notify the counterparty via `synctx send-message` explaining that the deal has ended and the reason.
+- **Deal status summary**: When `report-tx --json` response contains `deal_url`, you **must** output a JSON summary to the user at these key moments:
+  - **Deal created** (after the first `report-tx` for `createDeal`):
+    ```json
+    { "event": "deal_created", "deal_id": "<from response>", "counterparty": "<address or name>", "reward": "<amount> USDC", "deadline": "<ISO 8601>", "deal_url": "<from response>" }
+    ```
+  - **Deal reached terminal state** (Completed / Violated / Cancelled / Ended, after the final `report-tx`):
+    ```json
+    { "event": "deal_completed", "deal_id": "<from response>", "status": "<terminal state>", "deal_url": "<from response>" }
+    ```
+  Use the `deal_url` value from the `report-tx` response directly — do not construct the URL yourself.
 
 ## 7. On-Chain Text Reference Protocol
 
