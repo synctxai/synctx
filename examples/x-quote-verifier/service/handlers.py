@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -211,5 +212,24 @@ async def _check_tweet_with_result(username: str, target_tweet_id: str, new_twee
         return 0, f"verification inconclusive: {result.error}"
 
     if result.verified:
+        return 1, "quote tweet verified"
+
+    # Tweet not found — may be due to third-party API propagation delay.
+    # Wait and retry once before concluding it truly doesn't exist.
+    logger.info("Tweet %s not found on first attempt, retrying after 5s...", quote_tweet_id)
+    await asyncio.sleep(5)
+
+    try:
+        result = await has_quote(username, target_tweet_id, quote_tweet_id)
+    except Exception as e:
+        logger.warning("Tweet verification retry API exception, returning inconclusive: %s", e)
+        return 0, f"verification inconclusive: {e}"
+
+    if result.error is not None:
+        logger.warning("Tweet verification retry returned error, inconclusive: %s", result.error)
+        return 0, f"verification inconclusive: {result.error}"
+
+    if result.verified:
+        logger.info("Tweet %s found on retry", quote_tweet_id)
         return 1, "quote tweet verified"
     return -1, "quote tweet not found"
