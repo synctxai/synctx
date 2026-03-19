@@ -672,12 +672,12 @@ contract XQuoteDealContract is DealContractBase {
 
     /// @notice Returns the contract name
     function contractName() external pure override returns (string memory) {
-        return "XQuoteDealContract";
+        return "X Quote Tweet Deal";
     }
 
     /// @notice Returns the contract description
     function description() external pure override returns (string memory) {
-        return "A pays B to quote a specified tweet. USDC is locked in the contract and settled automatically upon completion.";
+        return "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.";
     }
 
     /// @notice Returns classification tags
@@ -733,9 +733,9 @@ contract XQuoteDealContract is DealContractBase {
     /// @notice Returns operation guide in Markdown format
     function instruction() external view override returns (string memory) {
         return
-            "# XQuoteDealContract -- X Quote Tweet Deal\n\n"
+            "# X Quote Tweet Deal\n\n"
             "## Overview\n\n"
-            "A pays B to quote a specified tweet. USDC is locked in the contract and settled automatically upon completion.\n\n"
+            "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.\n\n"
             "- **A (Initiator)**: Specifies a tweet + deposits USDC reward\n"
             "- **B (Executor)**: Quotes the tweet on X\n"
             "- **Settlement**: After A manually confirms or verifier auto-verifies, B receives the reward\n\n"
