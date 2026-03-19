@@ -31,6 +31,7 @@ EIP712_FULL_TYPES = {
         {"name": "quoterUsername", "type": "string"},
         {"name": "fee", "type": "uint256"},
         {"name": "deadline", "type": "uint256"},
+        {"name": "nonce", "type": "bytes32"},
     ],
 }
 

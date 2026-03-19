@@ -35,6 +35,7 @@ def sign_verify_request(
     quoter_username: str,
     fee: int,
     deadline: int,
+    nonce: str,
 ) -> SignResult:
     """Generate an EIP-712 signature corresponding to XQuoteVerifierSpec.check's VERIFY_TYPEHASH."""
 
@@ -47,6 +48,7 @@ def sign_verify_request(
             "quoterUsername": quoter_username,
             "fee": fee,
             "deadline": deadline,
+            "nonce": nonce,
         },
     }
 

@@ -197,7 +197,7 @@ contract XQuoteDealContract is DealContractBase {
         address verifier,
         uint96  verifierFee,
         uint256 deadline,
-        bytes32 nonce,
+        bytes32 verifierNonce,
         bytes calldata sig,
         string calldata tweet_id,
         string calldata quoter_username
@@ -217,10 +217,10 @@ contract XQuoteDealContract is DealContractBase {
         string memory canonicalUsername = _canonicalizeUsername(quoter_username);
         if (bytes(tweet_id).length == 0 || bytes(canonicalUsername).length == 0) revert InvalidParams();
 
-        _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, nonce, sig);
+        _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, verifierNonce, sig);
 
         // Consume nonce on verifier — prevents signature replay
-        IVerifier(verifier).consumeNonce(nonce);
+        IVerifier(verifier).consumeNonce(verifierNonce);
 
         // --- Transfer ---
         if (!IUSDC(USDC).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
@@ -759,6 +759,7 @@ contract XQuoteDealContract is DealContractBase {
             "| verifier | address | Verifier contract address |\n"
             "| verifierFee | uint96 | Verification fee (USDC raw value) |\n"
             "| deadline | uint256 | Verifier signature validity (Unix seconds) |\n"
+            "| verifierNonce | bytes32 | One-time nonce from verifier (prevents signature replay) |\n"
             "| sig | bytes | Verifier EIP-712 signature |\n"
             "| tweet_id | string | Tweet ID to be quoted |\n"
             "| quoter_username | string | B's X username. Leading @ and mixed case are accepted; the contract strips leading @ and lowercases internally |\n\n"
@@ -766,7 +767,7 @@ contract XQuoteDealContract is DealContractBase {
             "1. Confirm B has not already quoted the target tweet, otherwise the deal is meaningless\n"
             "2. Both parties have agreed on B's reward, tweet_id, quoter_username. A calls `protocolFee()` to get the protocol fee, grossAmount = reward + protocol fee\n"
             "3. USDC `approve(contract address, reward + protocol fee + verification fee)`, i.e., grossAmount + verifierFee\n"
-            "4. Obtain verifier signature via `request_sign` (sig + fee)\n\n"
+            "4. Obtain verifier signature via `request_sign` (sig + fee + verifierNonce)\n\n"
             "> On creation, `grossAmount` is transferred to the contract in full; the protocol fee is only sent to `FeeCollector` after B calls `accept`. If B does not accept and the deal is cancelled, both protocol fee and reward are refunded to A.\n\n"
             "## dealStatus Action Guide\n\n"
             "`dealStatus(dealIndex)` returns the current business status code. Refer to the table below for actions:\n\n"

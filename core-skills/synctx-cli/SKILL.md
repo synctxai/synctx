@@ -90,7 +90,7 @@ All commands support the `--json` flag for raw JSON output; agents should always
    - Calculate `grossAmount = reward + protocolFee`.
    - Calculate `approveAmount = reward + protocolFee + verifierFee`.
    - `USDC.approve(DealContract, approveAmount)`.
-   - Execute on-chain `createDeal(params + sig)` and record the returned `dealIndex`.
+   - Execute on-chain `createDeal(params + verifierNonce + sig)` and record the returned `dealIndex`. The `verifierNonce` is returned by `request_sign` along with `sig` and `fee`.
 8. **Execute and track**: Follow `instruction()` + `dealStatus(dealIndex)` to query the state (see S5.3 state table), execute corresponding actions based on state.
    - **Important**: `dealStatus` depends on the caller's identity; you must use your own address as `from` when making `eth_call`.
 9. **Trigger verification** (if needed):

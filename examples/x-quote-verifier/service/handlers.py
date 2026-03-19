@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -87,6 +88,7 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
         return
 
     fee = settings.verify_fee
+    nonce = "0x" + os.urandom(32).hex()
 
     try:
         result = sign_verify_request(
@@ -94,6 +96,7 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
             quoter_username=quoter_username,
             fee=fee,
             deadline=deadline,
+            nonce=nonce,
         )
 
         sig = result.signature if result.signature.startswith("0x") else f"0x{result.signature}"
@@ -101,6 +104,7 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
         response = {
             "accepted": True,
             "fee": fee,
+            "verifierNonce": nonce,
             "sig": sig,
         }
         logger.info("Signature successful: tweet_id=%s, fee=%d, deadline=%d", tweet_id, fee, deadline)
