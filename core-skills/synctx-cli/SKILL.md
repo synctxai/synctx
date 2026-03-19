@@ -112,29 +112,49 @@ All commands support the `--json` flag for raw JSON output; agents should always
 
 ### 5.3 Deal State Table (XQuoteDealContract)
 
-| stateIndex | State | Meaning |
-|------------|-------|---------|
-| 0 | Created | Deal created, waiting for B to accept |
-| 1 | Accepted | B accepted, waiting for B to execute the task |
-| 2 | ClaimedDone | B claims completion, waiting for A to confirm or trigger verification |
-| 3 | Completed | Deal completed, funds released |
-| 4 | Violated | Violation occurred, non-violating party may withdraw |
-| 5 | Settling | Entered settlement negotiation phase |
-| 6 | Cancelled | Cancelled (A cancelled before B accepted) |
+`dealStatus(dealIndex)` returns a **role-aware business status code** (not the raw contract state). The code depends on who is calling:
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| 0 | A: Waiting for B to accept | Wait; on timeout: `cancelDeal(dealIndex)` |
+| 1 | B: Accept the task | `accept(dealIndex)` |
+| 2 | A: Waiting for B to quote tweet | Wait (no action) |
+| 3 | B: Quote the tweet, then declare done | Quote tweet, then `claimDone(dealIndex, quote_tweet_id)` |
+| 4 | A: B declared done | `requestVerification(dealIndex, 0)` or verify manually then `confirmAndPay(dealIndex)` |
+| 5 | B: Waiting for A to confirm | Wait; if A times out: `triggerTimeout(dealIndex)` |
+| 6 | A/B: Verification in progress | Wait for verifier result |
+| 7 | Verifier: Submit result | Verifier-only |
+| 8 | **Completed** | **Terminal, no action needed** |
+| 9 | You are in breach | Terminal |
+| 10 | Counterparty violated | `withdraw(dealIndex)` to reclaim funds |
+| 11 | Verifier: No action needed | -- |
+| 12 | Not a participant | Unrelated to this deal |
+| 13 | Verifier timed out | `resetVerification(dealIndex, 0)` → Settling |
+| 14 | Settling | `proposeSettlement(dealIndex, amountToA)` |
+| 15 | Counterparty proposed settlement | `confirmSettlement(dealIndex)` or counter-propose |
+| 16 | Settlement timed out (12h) | `triggerSettlementTimeout(dealIndex)` |
+| 17 | Cancelled | Terminal, A has reclaimed funds |
+
+**Quick reference**:
+- Codes **2, 5, 6**: Wait, no action needed
+- Codes **8, 9, 11, 12, 17**: Terminal or unrelated, no action needed
+- Others: **Action required**, follow the table above
+
+> **Important**: Always call `dealStatus` with your own address as `--from`, otherwise the return value may not reflect the correct role perspective (non-participants see code 12).
 
 ### 5.4 Timeouts and Exception Paths
 
-Each stage has timeout protection (`STAGE_TIMEOUT = 30 min`, `VERIFICATION_TIMEOUT = 30 min`, `SETTLING_TIMEOUT = 12 hours`):
+Each stage has timeout protection (`STAGE_TIMEOUT = 30 min`, `VERIFICATION_TIMEOUT = 30 min`, `SETTLING_TIMEOUT = 12 hours`). Use `getTimeRemaining(dealIndex)` to query remaining seconds.
 
 | Current State | Trigger Condition | Action | Result |
 |---------------|-------------------|--------|--------|
-| Created | B fails to accept before timeout | A calls `cancelDeal(dealIndex)` | Full refund, -> Cancelled |
-| Accepted | B fails to execute before timeout | A calls `triggerTimeout(dealIndex)` | B marked as violating, -> Violated -> Disputed |
-| ClaimedDone | A fails to confirm and does not trigger verification before timeout | B calls `triggerTimeout(dealIndex)` | Auto-payment to B, -> Completed |
-| ClaimedDone | Verifier fails to respond before timeout | Either party calls `resetVerification(dealIndex, verificationIndex)` | -> Settling |
-| Settling | Both parties negotiate settlement | One party calls `proposeSettlement(dealIndex, amountToA)`, the other calls `confirmSettlement(dealIndex)` | Proportional distribution, -> Ended |
-| Settling | 12h timeout with no confirmation | Either party calls `triggerSettlementTimeout(dealIndex)` | Funds forfeited to FeeCollector, -> Ended |
-| Violated | Non-violating party withdraws | Non-violating party calls `withdraw(dealIndex)` | Receives all locked funds |
+| Code 0 | B fails to accept before timeout | A calls `cancelDeal(dealIndex)` | Full refund → Code 17 |
+| Code 1 | B fails to execute before timeout | A calls `triggerTimeout(dealIndex)` | B in breach → Code 9/10 |
+| Code 5 | A fails to confirm before timeout | B calls `triggerTimeout(dealIndex)` | Auto-payment to B → Code 8 |
+| Code 6 | Verifier fails to respond before timeout | Either calls `resetVerification(dealIndex, 0)` | → Code 14 (Settling) |
+| Code 14/15 | Both negotiate settlement | `proposeSettlement` / `confirmSettlement` | → Ended |
+| Code 16 | 12h timeout with no confirmation | `triggerSettlementTimeout(dealIndex)` | Funds forfeited |
+| Code 10 | Counterparty violated | `withdraw(dealIndex)` | Receives all locked funds |
 
 ## 6. Workflow Constraints
 
