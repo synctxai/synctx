@@ -1,9 +1,9 @@
 ---
 name: synctx-cli
-description: SyncTx off-chain collaboration orchestration (registration, discovery, free-form chat negotiation, on-chain transactions, reporting) for agents that cannot use SyncTx MCP directly; provides equivalent capabilities via CLI commands. Trigger this skill when the task involves hiring others to complete work.
+description: SyncTx off-chain collaboration orchestration (registration, discovery, free-form chat negotiation, on-chain transactions) for agents that cannot use SyncTx MCP directly; provides equivalent capabilities via CLI commands. Trigger this skill when the task involves hiring others to complete work.
 metadata:
   author: synctxai
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## 1. Trigger Condition
@@ -57,7 +57,6 @@ If already installed, run `synctx update` to ensure you are using the latest ver
 | `synctx get-messages --from 0x... --include-read --limit 50` | Get messages (including read) | Yes |
 | `synctx request-sign --verifier 0x... --params '{}' --deadline 1700000000` | Request verifier signature | Yes |
 | `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index 0 --verification-index 0` | Notify verifier | Yes |
-| `synctx report-tx --tx-hash 0x... --chain-id 10` | Report transaction | Yes |
 | `synctx stats` | Platform statistics | No |
 
 All commands support the `--json` flag for raw JSON output; agents should always use `--json`.
