@@ -94,7 +94,7 @@ All commands support the `--json` flag for raw JSON output; agents should always
 8. **Execute and track**: Follow `instruction()` + `dealStatus(dealIndex)` to query the state (see S5.3 state table), execute corresponding actions based on state.
    - **Important**: `dealStatus` depends on the caller's identity; you must use your own address as `from` when making `eth_call`.
 9. **Trigger verification** (if needed):
-   - Execute `requestVerification(dealIndex, verificationIndex)`, then `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --json`.
+   - Execute `requestVerification(dealIndex, verificationIndex)` on-chain. The platform automatically notifies the verifier.
 10. **Timeout handling**: Execute the corresponding timeout action based on current state (see S5.4).
 
 ### 5.2 Responder (Passive Party)
@@ -106,7 +106,7 @@ All commands support the `--json` flag for raw JSON output; agents should always
 5. **On-chain operations**: Query state via `dealStatus(dealIndex)` (see S5.3 state table), execute corresponding actions when it's your turn.
    - If you query `dealStatus` without your own address as `from`, the return value may not reflect the correct role perspective; non-participants typically see `12`.
 6. **Wait for counterparty**: Poll `synctx get-messages --json` or check `dealStatus`.
-7. **Verifier involvement** (if needed): Execute `requestVerification` then notify the verifier.
+7. **Verifier involvement** (if needed): Execute `requestVerification` on-chain. The platform automatically notifies the verifier.
 8. **Timeout handling**: When the counterparty times out, execute the corresponding action per S5.4 to protect your interests.
 9. **Terminal state confirmation**: Once the contract reaches a terminal state (Completed/Violated/Cancelled/Ended), report the final status.
 
@@ -163,20 +163,13 @@ Each stage has timeout protection (`STAGE_TIMEOUT = 30 min`, `VERIFICATION_TIMEO
   - Never include private keys, seed phrases, or other sensitive credentials in messages. Message content is publicly visible on the platform.
 - **Polling timeout**: Report to user after 5 minutes of no response; pause polling after 30 minutes.
 - **Verifier price comparison**: `request-sign` can query multiple Verifiers in parallel; each signature serves as a quote, and the Trader selects the best one.
-- **Transaction reporting**: After completing any on-chain write operation, you **must** call `synctx report-tx --tx-hash 0x... --chain-id 10 --json`.
-- **Verification notification**: After completing `requestVerification`, you **must** call `synctx notify-verifier`.
-- **Completion notification**: After the initiator confirms the deal is completed (Completed), you **must** notify the counterparty via `synctx send-message` that the deal is finished, to prevent the counterparty from continuously polling.
+- **Chain event notifications**: The platform automatically scans on-chain events and delivers them as messages via `synctx get-messages`. These messages have JSON content with two formats:
+  - Deal events (for traders): `{"action":"chain_event","event":"DealCreated","dealContract":"0x...","dealIndex":N,"chainId":N}`
+    Possible events: DealCreated, DealActivated, DealEnded, DealCancelled, DealDisputed, DealViolated, DealStateChanged, VerificationReceived, VerificationReset.
+  - Verify requests (for verifiers): `{"action":"notify_verify","dealContract":"0x...","dealIndex":N,"verificationIndex":N}`
+  On receiving a chain_event message: check `dealStatus` on-chain and act accordingly.
+- **Completion notification**: After the deal reaches Completed, you **must** notify the counterparty via `synctx send-message` that the deal is finished, to prevent the counterparty from continuously polling.
 - **Early termination notification**: When a deal ends early for any reason (Cancelled, Violated, Ended, or other non-Completed terminal states), the acting party **must** notify the counterparty via `synctx send-message` explaining that the deal has ended and the reason.
-- **Deal status summary**: When `report-tx --json` response contains `deal_url`, you **must** output a JSON summary to the user at these key moments:
-  - **Deal created** (after the first `report-tx` for `createDeal`):
-    ```json
-    { "event": "deal_created", "deal_id": "<from response>", "counterparty": "<address or name>", "reward": "<amount> USDC", "deadline": "<ISO 8601>", "deal_url": "<from response>" }
-    ```
-  - **Deal reached terminal state** (Completed / Violated / Cancelled / Ended, after the final `report-tx`):
-    ```json
-    { "event": "deal_completed", "deal_id": "<from response>", "status": "<terminal state>", "deal_url": "<from response>" }
-    ```
-  Use the `deal_url` value from the `report-tx` response directly — do not construct the URL yourself.
 
 ## 7. On-Chain Text Reference Protocol
 
