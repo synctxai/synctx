@@ -182,6 +182,40 @@ contract XQuoteDealContract is DealContractBase {
 
     // ===================== Create Deal =====================
 
+    /// @dev Validate parameters, verify signature, consume nonce, and transfer USDC.
+    ///      Extracted from createDeal to avoid stack-too-deep.
+    function _validateCreateDeal(
+        address partyB,
+        uint96  grossAmount,
+        address verifier,
+        uint96  verifierFee,
+        uint256 deadline,
+        bytes32 verifierNonce,
+        bytes calldata sig,
+        string calldata tweet_id,
+        string calldata quoter_username
+    ) internal returns (string memory canonicalUsername) {
+        if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
+        if (grossAmount - PROTOCOL_FEE < verifierFee) revert FeeTooLow();
+        if (partyB == address(0)) revert InvalidParams();
+        if (msg.sender == partyB) revert InvalidParams();
+
+        if (verifier == address(0)) revert InvalidParams();
+        if (msg.sender == verifier || partyB == verifier) revert InvalidParams();
+        if (verifier.code.length == 0) revert VerifierNotContract();
+        if (sig.length == 0) revert InvalidVerifierSign();
+        if (deadline < block.timestamp) revert SignatureExpired();
+
+        canonicalUsername = _canonicalizeUsername(quoter_username);
+        if (bytes(tweet_id).length == 0 || bytes(canonicalUsername).length == 0) revert InvalidParams();
+
+        _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, verifierNonce, sig);
+
+        IVerifier(verifier).consumeNonce(verifierNonce);
+
+        if (!IUSDC(USDC).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
+    }
+
     /// @notice Create a deal with pre-approved USDC
     /// @param partyB Counterparty (executor) address
     /// @param grossAmount Reward + protocol fee (USDC raw value)
@@ -202,28 +236,9 @@ contract XQuoteDealContract is DealContractBase {
         string calldata tweet_id,
         string calldata quoter_username
     ) external returns (uint256 dealIndex) {
-        // --- Validation ---
-        if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
-        if (grossAmount - PROTOCOL_FEE < verifierFee) revert FeeTooLow();
-        if (partyB == address(0)) revert InvalidParams();
-        if (msg.sender == partyB) revert InvalidParams();
-
-        if (verifier == address(0)) revert InvalidParams();
-        if (msg.sender == verifier || partyB == verifier) revert InvalidParams();
-        if (verifier.code.length == 0) revert VerifierNotContract();
-        if (sig.length == 0) revert InvalidVerifierSign();
-        if (deadline < block.timestamp) revert SignatureExpired();
-
-        string memory canonicalUsername = _canonicalizeUsername(quoter_username);
-        if (bytes(tweet_id).length == 0 || bytes(canonicalUsername).length == 0) revert InvalidParams();
-
-        _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, verifierNonce, sig);
-
-        // Consume nonce on verifier — prevents signature replay
-        IVerifier(verifier).consumeNonce(verifierNonce);
-
-        // --- Transfer ---
-        if (!IUSDC(USDC).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
+        string memory canonicalUsername = _validateCreateDeal(
+            partyB, grossAmount, verifier, verifierFee, deadline, verifierNonce, sig, tweet_id, quoter_username
+        );
 
         // --- Create deal ---
         {
