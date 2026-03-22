@@ -30,7 +30,7 @@ contract XQuoteVerifierSpec is IVerifierSpec {
 
     /// @inheritdoc IVerifierSpec
     function name() external pure override returns (string memory) {
-        return "XQuoteVerifierSpec";
+        return "X Quote Tweet Verifier Spec";
     }
 
     /// @inheritdoc IVerifierSpec
@@ -41,9 +41,9 @@ contract XQuoteVerifierSpec is IVerifierSpec {
     /// @inheritdoc IVerifierSpec
     function description() external pure override returns (string memory) {
         return
-            "Verifies X/Twitter quote tweets. "
-            "check params: string tweet_id, string quoter_username. "
-            "specParams (for verification): abi.encode(string tweet_id, string quoter_username, string quote_tweet_id).";
+            "X/Twitter quote-tweet verification spec. EIP-712 signature check. "
+            "check(tweet_id, quoter_username). "
+            "specParams: abi.encode(tweet_id, quoter_username, quote_tweet_id).";
     }
 
     /// @notice Verify EIP-712 signature for X quote tweet verification
