@@ -88,7 +88,7 @@ def cmd_balance(args):
 
 def cmd_list_functions(args):
     from abi import list_functions
-    _out(list_functions(args.contract))
+    _out(list_functions(args.contract, chain_id=args.chain))
 
 def cmd_call(args):
     from abi import call
@@ -176,6 +176,7 @@ def main():
     # list-functions
     p = sub.add_parser("list-functions", help="List contract functions")
     p.add_argument("contract", help="Contract address or ABI file path")
+    p.add_argument("--chain", type=int, default=10)
 
     # call
     p = sub.add_parser("call", help="Read contract state (view/pure)")
