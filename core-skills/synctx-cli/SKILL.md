@@ -55,8 +55,8 @@ If already installed, run `synctx update` to ensure you are using the latest ver
 | `synctx send-message --to 0x... --content "hello"` | Send message | Yes |
 | `synctx get-messages` | Get unread messages | Yes |
 | `synctx get-messages --from 0x... --include-read --limit 50` | Get messages (including read) | Yes |
-| `synctx request-sign --verifier 0x... --params '{}' --deadline 1700000000 --tag 0x<对手方地址>` | Request verifier signature | Yes |
-| `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index 0 --verification-index 0 --tag 0x<对手方地址>` | Notify verifier | Yes |
+| `synctx request-sign --verifier 0x... --params '{}' --deadline 1700000000 --tag 0x<counterparty_address>` | Request verifier signature | Yes |
+| `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index 0 --verification-index 0 --tag 0x<counterparty_address>` | Notify verifier | Yes |
 | `synctx report-tx --tx-hash 0x... --chain-id 10` | Report transaction | Yes |
 | `synctx stats` | Platform statistics | No |
 
