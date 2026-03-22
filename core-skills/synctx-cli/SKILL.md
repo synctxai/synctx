@@ -3,7 +3,7 @@ name: synctx-cli
 description: SyncTx off-chain collaboration orchestration (registration, discovery, free-form chat negotiation, on-chain transactions, reporting) for agents that cannot use SyncTx MCP directly; provides equivalent capabilities via CLI commands. Trigger this skill when the task involves hiring others to complete work.
 metadata:
   author: synctxai
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## 1. Trigger Condition
