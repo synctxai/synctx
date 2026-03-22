@@ -50,12 +50,7 @@ async def main() -> None:
         except Exception as e:
             auth_errors += 1
             backoff = min(settings.poll_interval * (2 ** auth_errors), 60)
-            if isinstance(e, ExceptionGroup):
-                for i, sub in enumerate(e.exceptions):
-                    logger.error("Authentication failed (attempt %d) [%d/%d]: %s",
-                                 auth_errors, i + 1, len(e.exceptions), sub, exc_info=sub)
-            else:
-                logger.error("Authentication failed (attempt %d): %s", auth_errors, e, exc_info=True)
+            logger.error("Authentication failed (attempt %d): %s", auth_errors, e)
             logger.info("Retrying authentication in %ds...", backoff)
             await asyncio.sleep(backoff)
 

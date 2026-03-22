@@ -203,7 +203,6 @@ contract XQuoteDealContract is DealContractBase {
     ) external returns (uint256 dealIndex) {
         // --- Validation ---
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
-        if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
         if (partyB == address(0)) revert InvalidParams();
         if (msg.sender == partyB) revert InvalidParams();
 
@@ -378,48 +377,36 @@ contract XQuoteDealContract is DealContractBase {
         d.verificationRequested = false;
         d.verificationTimestamp = 0;
 
+        // Pay escrowed verification fee to verifier
         uint96 vFee = d.verifierFee;
+        if (vFee > 0) {
+            if (!IUSDC(USDC).transfer(msg.sender, vFee)) revert TransferFailed();
+        }
 
-        // --- Effects: complete ALL state changes before any transfer (CEI) ---
-        uint96 transferToB = 0;
+        emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
         if (result > 0) {
             // Verification passed → pay B
-            transferToB = d.amount;
+            uint96 amt = d.amount;
             d.amount = 0;
             d.state = uint8(State.Completed);
+            if (!IUSDC(USDC).transfer(d.partyB, amt)) revert TransferFailed();
+            emit DealCompleted(dealIndex, amt);
+            _emitStateChanged(dealIndex, uint8(State.Completed));
+            _recordEnd(dealIndex);
         } else if (result < 0) {
             // Verification failed → B violated
             d.state = uint8(State.Violated);
             d.violator = d.partyB;
-        } else {
-            // result == 0 → inconclusive, enter Settling
-            d.state = uint8(State.Settling);
-            d.stageTimestamp = uint48(block.timestamp);
-        }
-
-        // --- Events ---
-        emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
-
-        if (result > 0) {
-            emit DealCompleted(dealIndex, transferToB);
-            _emitStateChanged(dealIndex, uint8(State.Completed));
-            _recordEnd(dealIndex);
-        } else if (result < 0) {
             _emitViolated(dealIndex, d.partyB);
             _emitStateChanged(dealIndex, uint8(State.Violated));
             _recordDispute(dealIndex);
         } else {
+            // result == 0 → inconclusive, enter Settling
+            d.state = uint8(State.Settling);
+            d.stageTimestamp = uint48(block.timestamp);
             _emitStateChanged(dealIndex, uint8(State.Settling));
             emit SettlingStarted(dealIndex);
-        }
-
-        // --- Interactions: all transfers last ---
-        if (vFee > 0) {
-            if (!IUSDC(USDC).transfer(msg.sender, vFee)) revert TransferFailed();
-        }
-        if (transferToB > 0) {
-            if (!IUSDC(USDC).transfer(d.partyB, transferToB)) revert TransferFailed();
         }
     }
 
@@ -439,23 +426,24 @@ contract XQuoteDealContract is DealContractBase {
             revert VerificationNotTimedOut();
 
         address requester = d.isRequesterA ? d.partyA : d.partyB;
-        uint96 vFee = d.verifierFee;
 
-        // --- Effects: all state changes first (CEI) ---
+        // Reset verification state
         d.verificationRequested = false;
         d.verificationTimestamp = 0;
-        d.state = uint8(State.Settling);
-        d.stageTimestamp = uint48(block.timestamp);
 
-        // --- Events ---
-        emit VerificationReset(dealIndex, verificationIndex, d.verifier);
-        emit SettlingStarted(dealIndex);
-        _emitStateChanged(dealIndex, uint8(State.Settling));
-
-        // --- Interactions: transfer last ---
+        // Refund escrowed verification fee to requester
+        uint96 vFee = d.verifierFee;
         if (vFee > 0) {
             if (!IUSDC(USDC).transfer(requester, vFee)) revert TransferFailed();
         }
+
+        // Enter settling mode
+        d.state = uint8(State.Settling);
+        d.stageTimestamp = uint48(block.timestamp);
+
+        emit VerificationReset(dealIndex, verificationIndex, d.verifier);
+        emit SettlingStarted(dealIndex);
+        _emitStateChanged(dealIndex, uint8(State.Settling));
     }
 
     // ===================== Settlement =====================
@@ -670,12 +658,12 @@ contract XQuoteDealContract is DealContractBase {
 
     /// @notice Returns the contract name
     function contractName() external pure override returns (string memory) {
-        return "X Quote Tweet Deal";
+        return "XQuoteDealContract";
     }
 
     /// @notice Returns the contract description
     function description() external pure override returns (string memory) {
-        return "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.";
+        return "A pays B to quote a specified tweet. USDC is locked in the contract and settled automatically upon completion.";
     }
 
     /// @notice Returns classification tags
@@ -731,9 +719,9 @@ contract XQuoteDealContract is DealContractBase {
     /// @notice Returns operation guide in Markdown format
     function instruction() external view override returns (string memory) {
         return
-            "# X Quote Tweet Deal\n\n"
+            "# XQuoteDealContract -- X Quote Tweet Deal\n\n"
             "## Overview\n\n"
-            "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.\n\n"
+            "A pays B to quote a specified tweet. USDC is locked in the contract and settled automatically upon completion.\n\n"
             "- **A (Initiator)**: Specifies a tweet + deposits USDC reward\n"
             "- **B (Executor)**: Quotes the tweet on X\n"
             "- **Settlement**: After A manually confirms or verifier auto-verifies, B receives the reward\n\n"

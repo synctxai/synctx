@@ -62,24 +62,20 @@ class PlatformClient:
         if self.auth_token:
             headers["Authorization"] = f"Bearer {self.auth_token}"
 
-        try:
-            async with streamable_http_client(
-                settings.platform_url,
-                headers=headers,
-            ) as (read_stream, write_stream, _):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        result = await session.call_tool(tool_name, arguments)
+        async with streamable_http_client(
+            settings.platform_url,
+            headers=headers,
+        ) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool_name, arguments)
 
-                        if result.isError:
-                            text = result.content[0].text if result.content else "Unknown error"
-                            raise RuntimeError(f"MCP tool {tool_name} error: {text}")
+                    if result.isError:
+                        text = result.content[0].text if result.content else "Unknown error"
+                        raise RuntimeError(f"MCP tool {tool_name} error: {text}")
 
-                        text = result.content[0].text if result.content else "{}"
-                        return json.loads(text)
-        except ExceptionGroup as eg:
-            errors = [str(e) for e in eg.exceptions]
-            raise RuntimeError(f"MCP call {tool_name} failed: {'; '.join(errors)}") from eg
+                    text = result.content[0].text if result.content else "{}"
+                    return json.loads(text)
 
     # ------------------------------------------------------------------
     # Public API
