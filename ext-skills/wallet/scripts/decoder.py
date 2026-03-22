@@ -25,7 +25,7 @@ def decode_revert(error_data: str, contract_address: str | None = None, *, chain
     # Custom errors via ABI
     if contract_address:
         try:
-            abi = _load(contract_address, chain_id=chain_id)
+            abi = _load(contract_address)
             for item in abi:
                 if item.get("type") != "error": continue
                 types = [inp["type"] for inp in item.get("inputs", [])]
@@ -42,7 +42,7 @@ def decode_revert(error_data: str, contract_address: str | None = None, *, chain
 def decode_logs(tx_hash: str, contract_address: str, *, chain_id: int = 10) -> list[dict]:
     w3 = get_w3(chain_id)
     receipt = w3.eth.get_transaction_receipt(tx_hash)
-    abi = _load(contract_address, chain_id=chain_id)
+    abi = _load(contract_address)
     event_map = {}
     for item in abi:
         if item.get("type") != "event": continue

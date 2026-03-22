@@ -22,7 +22,7 @@ except ImportError:
     from fetch_abi import fetch_abi
 
 # (path_or_address) -> list[dict]  Load ABI JSON; bare filenames resolved relative to scripts/ then abis/; contract addresses auto-fetched
-def _load(path: str, chain_id: int = 10) -> list[dict]:
+def _load(path: str) -> list[dict]:
     p = Path(path)
     if not p.is_absolute() and not p.exists():
         p = _SCRIPT_DIR / path
@@ -30,7 +30,7 @@ def _load(path: str, chain_id: int = 10) -> list[dict]:
         p = _SKILL_DIR / "abis" / Path(path).name
     if not p.exists():
         # Treat as contract address, fetch ABI
-        p = Path(fetch_abi(path, chain_id=chain_id))
+        p = Path(fetch_abi(path))
     with open(p) as f:
         return json.load(f)
 
@@ -75,9 +75,9 @@ def _serialize(value: Any) -> Any:
     return value
 
 # (abi_json) -> {read: [sig, ...], write: [sig, ...]}  Parse ABI JSON file; sigs can be passed directly to call/invoke
-def list_functions(abi_json: str, chain_id: int = 10) -> dict[str, list[str]]:
+def list_functions(abi_json: str) -> dict[str, list[str]]:
     read_fns, write_fns = [], []
-    for item in _load(abi_json, chain_id=chain_id):
+    for item in _load(abi_json):
         if item.get("type") != "function":
             continue
         ins = ",".join(i["type"] for i in item.get("inputs", []))
