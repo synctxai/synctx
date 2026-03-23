@@ -18,7 +18,9 @@ def fetch_abi(address: str, chain_id: int = 10) -> str:
     if cached.exists():
         return str(cached)
 
-    abi = _fetch_from_sourcify(address, chain_id)
+    abi = _fetch_from_abi_proxy(address, chain_id)
+    if abi is None:
+        abi = _fetch_from_sourcify(address, chain_id)
     if abi is None:
         abi = _fetch_from_etherscan(address, chain_id)
     if abi is None:
@@ -30,6 +32,22 @@ def fetch_abi(address: str, chain_id: int = 10) -> str:
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_text(json.dumps(abi, indent=2))
     return str(cached)
+
+def _fetch_from_abi_proxy(address: str, chain_id: int) -> list[dict] | None:
+    proxy_url = os.environ.get("ABI_PROXY_URL")
+    if not proxy_url:
+        return None
+    url = f"{proxy_url}/abi/{chain_id}/{address}"
+    try:
+        r = httpx.get(url, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if data.get("status") == "1" and data.get("result"):
+            return json.loads(data["result"]) if isinstance(data["result"], str) else data["result"]
+        return None
+    except Exception:
+        return None
 
 def _fetch_from_sourcify(address: str, chain_id: int) -> list[dict] | None:
     url = f"https://sourcify.dev/server/files/any/{chain_id}/{address}"
