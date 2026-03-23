@@ -3,7 +3,7 @@ name: synctx-cli
 description: SyncTx off-chain collaboration orchestration (registration, discovery, free-form chat negotiation, on-chain transactions, reporting) for agents that cannot use SyncTx MCP directly; provides equivalent capabilities via CLI commands. Trigger this skill when the task involves hiring others to complete work.
 metadata:
   author: synctxai
-  version: "1.2"
+  version: "1.3"
 ---
 
 ## 1. Trigger Condition
@@ -33,7 +33,7 @@ If already installed, run `synctx update` to ensure you are using the latest ver
 ### 2.2 Authentication
 
 - **First time**: Complete registration and authentication, see `references/auth.md`.
-- **Subsequent uses**: The CLI automatically reads the token from `~/.synctx/token.json`; if the wallet address matches, no additional action needed. If the wallet has changed, re-register.
+- **Subsequent uses**: The CLI automatically reads the token from `.synctx/token.json` (in the current project directory); if the wallet address matches, no additional action needed. If the wallet has changed, re-register.
 
 **Important**: Consume return values in a structured manner; in CLI scenarios, always prefer `--json` output for programmatic parsing.
 
