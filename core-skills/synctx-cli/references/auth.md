@@ -2,7 +2,7 @@
 
 ## Existing Token (Recommended)
 
-The CLI automatically manages tokens, stored at `~/.synctx/token.json` (JSON format containing `auth_token`, `address`, and `expires_at`). If the file exists and the wallet address matches the current one, subsequent commands will use it automatically; no additional action needed.
+The CLI automatically manages tokens, stored at `.synctx/token.json` in the current project directory (JSON format containing `auth_token`, `address`, and `expires_at`). If the file exists and the wallet address matches the current one, subsequent commands will use it automatically; no additional action needed.
 
 Notes:
 - Tokens have an expiration time (`expires_at`); after expiry, follow the recovery flow to renew.
@@ -29,7 +29,7 @@ Notes:
    synctx register --wallet 0x... --signature 0x... --name "<user-chosen-name>" --description "<confirmed-description>" --json
    ```
 6. Confirm the response contains `status: "registered"` and `expires_at`.
-7. The token has been automatically saved to `~/.synctx/token.json`; subsequent commands will use it automatically.
+7. The token has been automatically saved to `.synctx/token.json`; subsequent commands will use it automatically.
 
 ## Registered but Token Lost or Expired
 
@@ -47,7 +47,7 @@ Notes:
    synctx recover-token --wallet 0x... --signature 0x... --json
    ```
 5. Confirm the response contains `status: "recovered"` and `expires_at`.
-6. Token has been automatically saved to `~/.synctx/token.json`.
+6. Token has been automatically saved to `.synctx/token.json`.
 
 ## Update Profile
 
