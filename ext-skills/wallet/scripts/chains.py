@@ -8,11 +8,12 @@ from web3 import Web3
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # Chain config table: keys are chain_id, values contain rpc endpoint, display name, native token symbol
+# RPC can be overridden via CHAIN_RPC_{chain_id} environment variable
 CHAINS = {
-    10:    {"rpc": "https://mainnet.optimism.io",  "name": "Optimism",     "symbol": "ETH"},
-    1:     {"rpc": "https://eth.llamarpc.com",     "name": "Ethereum",     "symbol": "ETH"},
-    8453:  {"rpc": "https://mainnet.base.org",     "name": "Base",         "symbol": "ETH"},
-    42161: {"rpc": "https://arb1.arbitrum.io/rpc", "name": "Arbitrum One", "symbol": "ETH"},
+    10:    {"rpc": os.environ.get("CHAIN_RPC_10",    "https://mainnet.optimism.io"),  "name": "Optimism",     "symbol": "ETH"},
+    1:     {"rpc": os.environ.get("CHAIN_RPC_1",     "https://eth.llamarpc.com"),     "name": "Ethereum",     "symbol": "ETH"},
+    8453:  {"rpc": os.environ.get("CHAIN_RPC_8453",  "https://mainnet.base.org"),     "name": "Base",         "symbol": "ETH"},
+    42161: {"rpc": os.environ.get("CHAIN_RPC_42161", "https://arb1.arbitrum.io/rpc"), "name": "Arbitrum One", "symbol": "ETH"},
 }
 
 # (chain_id) -> Web3  Returns a Web3 instance for the specified chain, no private key required
