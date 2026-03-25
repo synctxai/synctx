@@ -4,3 +4,4 @@ auth_token.txt
 __pycache__/
 *.pyc
 node_modules/
+examples/x-quote-verifier/uv.lock

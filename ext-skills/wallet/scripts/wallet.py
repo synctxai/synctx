@@ -36,7 +36,7 @@ def eth_balance(chain_id: int = 10) -> dict:
 def sign_message(message: str) -> dict:
     account = get_account()
     signed = account.sign_message(encode_defunct(text=message))
-    return {"address": account.address, "message": message, "signature": signed.signature.hex()}
+    return {"address": account.address, "message": message, "signature": "0x" + signed.signature.hex()}
 
 # (typed_data) -> {address, signature, v, r, s}  EIP-712 structured data signature; typed_data can be a dict or JSON file path
 def sign_typed_data(typed_data: dict | str) -> dict:
@@ -45,7 +45,7 @@ def sign_typed_data(typed_data: dict | str) -> dict:
             typed_data = json.load(f)
     account = get_account()
     signed = account.sign_message(encode_typed_data(full_message=typed_data))
-    return {"address": account.address, "signature": signed.signature.hex(),
+    return {"address": account.address, "signature": "0x" + signed.signature.hex(),
             "v": signed.v, "r": hex(signed.r), "s": hex(signed.s)}
 
 # USDC addresses per chain
