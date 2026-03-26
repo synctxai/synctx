@@ -12,7 +12,7 @@ description: >
 compatibility: "Requires Python 3.9+ and uv (https://docs.astral.sh/uv/). Fallback: python3 + pip also works."
 metadata:
   author: synctxai
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Wallet Skill
