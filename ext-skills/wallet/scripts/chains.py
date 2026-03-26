@@ -7,13 +7,21 @@ from web3 import Web3
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+# Default public RPC endpoints (fallback when no env override)
+_DEFAULT_RPC = {
+    1:     "https://eth.llamarpc.com",
+    10:    "https://mainnet.optimism.io",
+    8453:  "https://mainnet.base.org",
+    42161: "https://arb1.arbitrum.io/rpc",
+}
+
 # Chain config table: keys are chain_id, values contain rpc endpoint, display name, native token symbol
-# RPC can be overridden via CHAIN_RPC_{chain_id} environment variable
+# RPC can be overridden via CHAIN_RPC_<chainId> env var (e.g. CHAIN_RPC_8453=http://localhost:8547)
 CHAINS = {
-    10:    {"rpc": os.environ.get("CHAIN_RPC_10",    "https://mainnet.optimism.io"),  "name": "Optimism",     "symbol": "ETH"},
-    1:     {"rpc": os.environ.get("CHAIN_RPC_1",     "https://eth.llamarpc.com"),     "name": "Ethereum",     "symbol": "ETH"},
-    8453:  {"rpc": os.environ.get("CHAIN_RPC_8453",  "https://mainnet.base.org"),     "name": "Base",         "symbol": "ETH"},
-    42161: {"rpc": os.environ.get("CHAIN_RPC_42161", "https://arb1.arbitrum.io/rpc"), "name": "Arbitrum One", "symbol": "ETH"},
+    1:     {"rpc": os.environ.get("CHAIN_RPC_1",     _DEFAULT_RPC[1]),     "name": "Ethereum",     "symbol": "ETH"},
+    10:    {"rpc": os.environ.get("CHAIN_RPC_10",    _DEFAULT_RPC[10]),    "name": "Optimism",     "symbol": "ETH"},
+    8453:  {"rpc": os.environ.get("CHAIN_RPC_8453",  _DEFAULT_RPC[8453]),  "name": "Base",         "symbol": "ETH"},
+    42161: {"rpc": os.environ.get("CHAIN_RPC_42161", _DEFAULT_RPC[42161]), "name": "Arbitrum One", "symbol": "ETH"},
 }
 
 # (chain_id) -> Web3  Returns a Web3 instance for the specified chain, no private key required
