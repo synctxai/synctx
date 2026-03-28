@@ -38,32 +38,18 @@ interface IDeal {
     /// @dev Agent 以此为主要入口理解合约的使用方法
     function instruction() external view returns (string memory);
 
-    /// @notice 平台级统一交易状态
-    /// @dev 0=NotFound, 1=Active, 2=Success, 3=Failed, 4=Refunding, 5=Cancelled
+    /// @notice 平台级统一交易阶段
+    /// @dev 0=NotFound, 1=Pending, 2=Active, 3=Success, 4=Failed, 5=Cancelled
+    ///      Pending 表示已创建但未生效（可跳过，直接进入 Active）。
+    ///      Cancelled 仅从 Pending 可达；Active 之后只能到 Success 或 Failed。
     function phase(uint256 dealIndex) external view returns (uint8);
 
     /// @notice 业务级交易状态码
-    /// @dev 由各实现定义，返回角色感知的详细状态码
+    /// @dev 由各实现定义，返回统一的详细状态码（不依赖 msg.sender）
     function dealStatus(uint256 dealIndex) external view returns (uint8);
 
     /// @notice 指定索引的交易是否存在
     function dealExists(uint256 dealIndex) external view returns (bool);
-
-    // ===================== 统计 =====================
-    // 这些计数器由 DealBase 以 private 存储维护，防止子合约篡改。
-    // 平台信誉系统依赖这些数据。
-
-    /// @notice 已创建的交易总数
-    function startCount() external view returns (uint256);
-
-    /// @notice 已激活（所有参与方确认）的交易总数
-    function activatedCount() external view returns (uint256);
-
-    /// @notice 正常结束的交易总数
-    function endCount() external view returns (uint256);
-
-    /// @notice 以争议结束的交易总数
-    function disputeCount() external view returns (uint256);
 
     // ===================== 验证 =====================
     // 验证是可选的。不需要验证的合约 requiredSpecs() 返回空数组即可。
@@ -100,35 +86,28 @@ interface IDeal {
     /// @param verificationIndex 验证槽位索引
     /// @param result 验证结果：正数=通过，负数=失败，0=不确定
     /// @param reason 人类可读的原因描述
-    function onReportResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason) external;
+    function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason) external;
 
     // ===================== 事件 =====================
 
-    // --- 生命周期事件（统计相关，由 DealBase 内部辅助函数发出） ---
+    // --- 生命周期事件（由 DealBase 内部辅助函数发出） ---
 
-    /// @notice 新交易创建时发出（startCount++）
+    /// @notice 新交易创建时发出（携带参与方信息，供平台建索引）
     event DealCreated(uint256 indexed dealIndex, address[] traders, address[] verifiers);
 
-    /// @notice 所有参与方确认后发出（activatedCount++）
-    event DealActivated(uint256 indexed dealIndex);
+    /// @notice Phase 变更时发出（合并了 Activated/Ended/Disputed/Cancelled）
+    /// @dev 1=Pending, 2=Active, 3=Success, 4=Failed, 5=Cancelled
+    ///      DealCreated 已隐含进入 Pending/Active，此事件覆盖后续转换。
+    ///      平台按 indexed phase 过滤即可替代原来的多个事件。
+    event DealPhaseChanged(uint256 indexed dealIndex, uint8 indexed phase);
 
-    /// @notice 交易正常结束时发出（endCount++）
-    event DealEnded(uint256 indexed dealIndex);
-
-    /// @notice 交易以争议结束时发出（disputeCount++）
-    event DealDisputed(uint256 indexed dealIndex);
-
-    /// @notice 激活前取消时发出（不影响统计计数）
-    event DealCancelled(uint256 indexed dealIndex);
-
-    /// @notice 参与方违约时发出
+    /// @notice 参与方违约时发出（标记违约方，与 DealPhaseChanged→Failed 同时发出）
     event DealViolated(uint256 indexed dealIndex, address indexed violator);
 
-    // --- 状态与验证事件 ---
+    // --- 业务状态与验证事件 ---
 
-    /// @notice 每次状态转换时发出
-    /// @param stateIndex 业务状态枚举值（与角色无关，不同于 dealStatus）
-    ///        平台通过 stateIndex + instruction() 推断当前需要谁行动
+    /// @notice 每次业务状态转换时发出
+    /// @param stateIndex dealStatus 基础值（存储写入时的状态码）
     event DealStateChanged(uint256 indexed dealIndex, uint8 stateIndex);
 
     /// @notice 收到验证结果时发出
