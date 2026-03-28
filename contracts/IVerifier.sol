@@ -1,36 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title IVerifier - Verifier contract standard interface (v3)
-/// @notice All verifier contracts must implement this interface.
-/// @dev check() is NOT part of IVerifier — it belongs to the VerifierSpec contract.
-///      VerifierBase exposes DOMAIN_SEPARATOR (public) and owner (public) for Spec's check() to read.
+/// @title IVerifier - 验证者合约标准接口 (v3)
+/// @notice 所有验证者合约必须实现此接口。
+/// @dev check() 不属于 IVerifier — 它属于 VerifierSpec 合约。
+///      VerifierBase 暴露 DOMAIN_SEPARATOR（public）和 owner（public）供 Spec 的 check() 读取。
 interface IVerifier {
 
-    /// @notice Submit verification result to a deal contract
-    /// @param dealContract The deal contract address
-    /// @param dealIndex The deal index
-    /// @param verificationIndex The verification slot index
-    /// @param result Verification result: positive=pass, negative=fail, 0=inconclusive
-    /// @param reason Human-readable reason
-    /// @param expectedFee Expected USDC fee; reverts if DealContract does not pay this amount
+    /// @notice 向交易合约提交验证结果
+    /// @param dealContract 交易合约地址
+    /// @param dealIndex 交易索引
+    /// @param verificationIndex 验证槽位索引
+    /// @param result 验证结果：正数=通过，负数=失败，0=不确定
+    /// @param reason 人类可读的原因描述
+    /// @param expectedFee 预期 USDC 费用；如果 DealContract 未支付此金额则 revert
     function reportResult(address dealContract, uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason, uint256 expectedFee) external;
 
-    /// @notice Verifier instance name (for display purposes)
+    /// @notice Verifier 实例名称（用于展示）
     function name() external view returns (string memory);
 
-    /// @notice Verification capability description (instance-level self-description)
+    /// @notice 验证能力描述（实例级别的自我介绍）
     function description() external view returns (string memory);
 
-    /// @notice Contract owner
+    /// @notice 合约 owner（签名和提交结果的 EOA）
     function owner() external view returns (address);
 
-    /// @notice Returns the business spec contract address this verifier implements
+    /// @notice 返回此 Verifier 实现的业务 Spec 合约地址
     function spec() external view returns (address);
 
-    /// @notice EIP-712 domain separator (public for Spec's check() to read)
+    /// @notice EIP-712 域分隔符（public，供 Spec 的 check() 读取）
     function DOMAIN_SEPARATOR() external view returns (bytes32);
 
-    /// @notice ERC-165 interface detection
+    /// @notice ERC-165 接口检测
     function supportsInterface(bytes4 interfaceId) external pure returns (bool);
 }

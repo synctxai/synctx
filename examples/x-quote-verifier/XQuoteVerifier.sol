@@ -3,30 +3,38 @@ pragma solidity ^0.8.20;
 
 import "./VerifierBase.sol";
 
-/// @title XQuoteVerifier - X (Twitter) quote tweet verifier
-/// @notice Verifier instance for X quote tweet verification.
-/// @dev v3 architecture: check() lives in XQuoteVerifierSpec, not here.
-///      This contract inherits VerifierBase (owner, DOMAIN_SEPARATOR, reportResult, withdrawFees)
-///      and points to XQuoteVerifierSpec via spec().
+/// @title XQuoteVerifier - X (Twitter) 引用推文验证者
+/// @notice 用于 X 引用推文验证的 Verifier 实例。
+/// @dev v3 架构：check() 在 XQuoteVerifierSpec 中，不在此处。
+///      此合约继承 VerifierBase（owner、DOMAIN_SEPARATOR、reportResult、withdrawFees），
+///      并通过 spec() 指向 XQuoteVerifierSpec。
+///
+///      职责分工：
+///      - XQuoteVerifierSpec：定义 EIP-712 TYPEHASH，验证签名的有效性
+///      - XQuoteVerifier（本合约）：持有 owner、DOMAIN_SEPARATOR，提交验证结果，管理费用
+///      - 链下服务：监听 VerificationRequested 事件，调用 X API 执行实际验证，调用 reportResult
 contract XQuoteVerifier is VerifierBase {
 
-    // ============ State ============
+    // ============ 常量 ============
 
-    /// @notice Maximum request_sign deadline window accepted by this verifier instance
+    /// @notice 此 Verifier 实例接受的最大签名有效期（秒）
     uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 3600;
 
-    /// @notice The XQuoteVerifierSpec contract address
+    // ============ 不可变量 ============
+
+    /// @notice XQuoteVerifierSpec 合约地址
     address public immutable SPEC;
 
-    // ============ Constructor ============
+    // ============ 构造函数 ============
 
-    /// @param specAddress The deployed XQuoteVerifierSpec contract address
+    /// @param usdc_ USDC 代币地址
+    /// @param specAddress 已部署的 XQuoteVerifierSpec 合约地址
     constructor(address usdc_, address specAddress) VerifierBase(usdc_, "XQuoteVerifier", "1") {
         require(specAddress != address(0), "spec cannot be zero");
         SPEC = specAddress;
     }
 
-    // ============ IVerifier ============
+    // ============ IVerifier 实现 ============
 
     /// @inheritdoc IVerifier
     function description() external pure override(VerifierBase) returns (string memory) {
