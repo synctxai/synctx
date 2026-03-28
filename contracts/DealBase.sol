@@ -85,7 +85,7 @@ abstract contract DealBase is IDeal {
 
     function dealExists(uint256 dealIndex) external view virtual returns (bool);
 
-    function protocolFee() external view virtual returns (uint96);
+    function protocolFeePolicy() external view virtual returns (string memory);
 
     function requiredSpecs() external view virtual returns (address[] memory);
 

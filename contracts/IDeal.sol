@@ -27,8 +27,9 @@ interface IDeal {
     /// @notice ERC-165 接口检测
     function supportsInterface(bytes4 interfaceId) external pure returns (bool);
 
-    /// @notice 协议费金额（Trader 读取此值来计算 grossAmount = reward + protocolFee）
-    function protocolFee() external view returns (uint96);
+    /// @notice 协议费收费规则说明
+    /// @dev 返回人类可读的收费规则描述，合约自行暴露计算函数供 agent 调用
+    function protocolFeePolicy() external view returns (string memory);
 
     // ===================== 指引与状态 =====================
     // instruction() 是 Agent 理解合约的主要入口。

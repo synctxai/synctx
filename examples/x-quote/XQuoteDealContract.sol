@@ -670,8 +670,16 @@ contract XQuoteDealContract is DealBase {
         return "1.0";
     }
 
-    function protocolFee() external view override returns (uint96) {
+    function protocolFee() external view returns (uint96) {
         return PROTOCOL_FEE;
+    }
+
+    function protocolFeePolicy() external pure override returns (string memory) {
+        return
+            "Fixed protocol fee per deal. "
+            "A pays grossAmount = reward + protocolFee on createDeal. "
+            "Fee is sent to FeeCollector when B calls accept; fully refunded if cancelled before accept. "
+            "Query exact value via protocolFee().";
     }
 
     // ===================== 验证查询 =====================
