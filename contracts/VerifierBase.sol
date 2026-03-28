@@ -87,7 +87,7 @@ abstract contract VerifierBase is IVerifier {
     // ============ IVerifier 实现 ============
 
     /// @inheritdoc IVerifier
-    /// @dev 通过检查 onReportResult 调用前后的 USDC 余额变化来确认 DealContract 已支付验证费。
+    /// @dev 通过检查 onVerificationResult 调用前后的 USDC 余额变化来确认 DealContract 已支付验证费。
     ///      如果余额增加量 < expectedFee，交易 revert，验证结果不会被提交。
     ///      这保证了 Verifier 提交结果 = 收到费用，两者原子性完成。
     function reportResult(
@@ -99,7 +99,7 @@ abstract contract VerifierBase is IVerifier {
         uint256 expectedFee
     ) external override onlyOwner {
         uint256 balBefore = IERC20(USDC).balanceOf(address(this));
-        IDeal(dealContract).onReportResult(dealIndex, verificationIndex, result, reason);
+        IDeal(dealContract).onVerificationResult(dealIndex, verificationIndex, result, reason);
         if (IERC20(USDC).balanceOf(address(this)) - balBefore < expectedFee) revert FeeNotReceived();
     }
 

@@ -5,7 +5,7 @@ import "./VerifierBase.sol";
 
 /// @title XQuoteVerifier - X (Twitter) 引用推文验证者
 /// @notice 用于 X 引用推文验证的 Verifier 实例。
-/// @dev v3 架构：check() 在 XQuoteVerifierSpec 中，不在此处。
+/// @dev check() 在 XQuoteVerifierSpec 中，不在此处。
 ///      此合约继承 VerifierBase（owner、DOMAIN_SEPARATOR、reportResult、withdrawFees），
 ///      并通过 spec() 指向 XQuoteVerifierSpec。
 ///
