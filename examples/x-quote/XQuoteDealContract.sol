@@ -5,10 +5,11 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./XQuoteVerifierSpec.sol";
 import "./IERC20.sol";
+import "./Initializable.sol";
 
 
 /// @title XQuoteDealContract - X 引用推文交易合约
-/// @notice 单合约管理所有交易。USDC 地址通过构造函数设置。
+/// @notice 单合约管理所有交易。feeToken 通过 setFeeToken() 一次性设置（跨链统一地址）。
 /// @dev USDC approve · 紧凑存储 · 自定义错误 · 直接支付
 ///      统一 dealStatus — status 字段直接存储 dealStatus 基础值，无内部 State 枚举
 ///
@@ -18,7 +19,7 @@ import "./IERC20.sol";
 ///      3. B 在 X 上引用推文，然后调用 claimDone 提交 quote_tweet_id
 ///      4. A 手动确认付款，或请求 Verifier 自动验证
 ///      5. 如果验证不确定或 Verifier 超时，进入协商阶段
-contract XQuoteDealContract is DealBase {
+contract XQuoteDealContract is DealBase, Initializable {
 
     // ===================== 错误 =====================
 
@@ -121,7 +122,6 @@ contract XQuoteDealContract is DealBase {
     uint256 public constant VERIFICATION_TIMEOUT = 30 minutes;
     uint256 public constant SETTLING_TIMEOUT = 12 hours;
 
-    address public immutable USDC;
     address public immutable FEE_COLLECTOR;
     uint96 public immutable PROTOCOL_FEE;
     address public immutable REQUIRED_SPEC;
@@ -175,14 +175,13 @@ contract XQuoteDealContract is DealBase {
 
     // ===================== 构造函数 =====================
 
-    constructor(address usdc_, address feeCollector, uint96 protocolFee_, address requiredSpec) {
-        if (usdc_ == address(0)) revert InvalidParams();
+    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec) {
+        _setInitializer();
         if (feeCollector == address(0) || feeCollector == address(this) || feeCollector.code.length == 0) {
             revert InvalidFeeCollector();
         }
         if (protocolFee_ < MIN_PROTOCOL_FEE) revert FeeTooLow();
         if (requiredSpec == address(0)) revert InvalidSpecAddress();
-        USDC = usdc_;
         FEE_COLLECTOR = feeCollector;
         PROTOCOL_FEE = protocolFee_;
         REQUIRED_SPEC = requiredSpec;
@@ -219,7 +218,7 @@ contract XQuoteDealContract is DealBase {
         _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, sig);
 
         // --- USDC 转入托管 ---
-        if (!IERC20(USDC).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
 
         // --- 创建交易记录 ---
         {
@@ -269,7 +268,7 @@ contract XQuoteDealContract is DealBase {
         emit DealAccepted(dealIndex);
         _emitStateChanged(dealIndex, WAITING_CLAIM);
 
-        if (!IERC20(USDC).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
+        if (!IERC20(feeToken).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
     }
 
     /// @notice B 声称已完成引用推文，提交 quote_tweet_id
@@ -305,7 +304,7 @@ contract XQuoteDealContract is DealBase {
         _emitStateChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
 
-        if (!IERC20(USDC).transfer(d.partyB, amt)) revert TransferFailed();
+        if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
     }
 
     // ===================== 取消（WAITING_ACCEPT → CANCELLED） =====================
@@ -327,7 +326,7 @@ contract XQuoteDealContract is DealBase {
         _emitStateChanged(dealIndex, CANCELLED);
 
         if (amt > 0) {
-            if (!IERC20(USDC).transfer(d.partyA, amt)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(d.partyA, amt)) revert TransferFailed();
         }
     }
 
@@ -347,8 +346,8 @@ contract XQuoteDealContract is DealBase {
         uint96 fee = d.verifierFee;
         address verifier = d.verifier;
 
-        if (IERC20(USDC).allowance(msg.sender, address(this)) < fee) revert InsufficientAllowance();
-        if (IERC20(USDC).balanceOf(msg.sender) < fee) revert InsufficientBalance();
+        if (IERC20(feeToken).allowance(msg.sender, address(this)) < fee) revert InsufficientAllowance();
+        if (IERC20(feeToken).balanceOf(msg.sender) < fee) revert InsufficientBalance();
 
         // CEI：先改状态
         d.status = VERIFYING;
@@ -357,7 +356,7 @@ contract XQuoteDealContract is DealBase {
 
         emit VerificationRequested(dealIndex, verificationIndex, verifier);
 
-        if (!IERC20(USDC).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
     }
 
     /// @notice Verifier 提交验证结果
@@ -406,10 +405,10 @@ contract XQuoteDealContract is DealBase {
 
         // --- 交互：所有转账最后执行 ---
         if (vFee > 0) {
-            if (!IERC20(USDC).transfer(msg.sender, vFee)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
         }
         if (transferToB > 0) {
-            if (!IERC20(USDC).transfer(d.partyB, transferToB)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(d.partyB, transferToB)) revert TransferFailed();
         }
     }
 
@@ -439,7 +438,7 @@ contract XQuoteDealContract is DealBase {
         _emitStateChanged(dealIndex, SETTLING);
 
         if (vFee > 0) {
-            if (!IERC20(USDC).transfer(requester, vFee)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(requester, vFee)) revert TransferFailed();
         }
     }
 
@@ -487,10 +486,10 @@ contract XQuoteDealContract is DealBase {
         _emitPhaseChanged(dealIndex, 3); // → Success
 
         if (toA > 0) {
-            if (!IERC20(USDC).transfer(d.partyA, toA)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(d.partyA, toA)) revert TransferFailed();
         }
         if (toB > 0) {
-            if (!IERC20(USDC).transfer(d.partyB, toB)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(d.partyB, toB)) revert TransferFailed();
         }
     }
 
@@ -516,7 +515,7 @@ contract XQuoteDealContract is DealBase {
         _emitPhaseChanged(dealIndex, 4); // → Failed
 
         if (seized > 0) {
-            if (!IERC20(USDC).transfer(FEE_COLLECTOR, seized)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(FEE_COLLECTOR, seized)) revert TransferFailed();
         }
     }
 
@@ -549,7 +548,7 @@ contract XQuoteDealContract is DealBase {
             emit DealCompleted(dealIndex, amt);
             _emitStateChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
-            if (!IERC20(USDC).transfer(d.partyB, amt)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
 
         } else {
             revert InvalidStatus();
@@ -568,7 +567,7 @@ contract XQuoteDealContract is DealBase {
 
         emit Withdrawn(dealIndex, msg.sender, amt);
 
-        if (!IERC20(USDC).transfer(msg.sender, amt)) revert TransferFailed();
+        if (!IERC20(feeToken).transfer(msg.sender, amt)) revert TransferFailed();
     }
 
     // ===================== 内部辅助函数 =====================
@@ -728,7 +727,7 @@ contract XQuoteDealContract is DealBase {
             "- After A manually confirms or verifier auto-verifies, B receives the reward\n\n"
             "| Item | Value |\n"
             "|----|----|\n"
-            "| Token | USDC (decimals=6), address via `USDC()` |\n"
+            "| Token | USDC (decimals=6), address via `feeToken()` |\n"
             "| Amount | Raw value x10^6, e.g. 1.5 USDC = `1500000` |\n\n"
             "## Price Negotiation\n\n"
             "Before creating a deal, A and B negotiate B's reward (net amount):\n\n"

@@ -4,13 +4,14 @@ pragma solidity ^0.8.20;
 import "./IVerifier.sol";
 import "./IDeal.sol";
 import "./IERC20.sol";
+import "./Initializable.sol";
 
 /// @title VerifierBase - 验证者抽象基类
 /// @notice 提供通用的验证者功能：owner 管理、DOMAIN_SEPARATOR、结果提交、费用提取。
 /// @dev check() 和 EIP-712 验证逻辑在 VerifierSpec 合约中，不在此处。
 ///      VerifierBase 暴露 DOMAIN_SEPARATOR（public immutable）和 owner（public）
 ///      供 Spec 的 check() 读取。
-abstract contract VerifierBase is IVerifier {
+abstract contract VerifierBase is IVerifier, Initializable {
 
     // ============ 错误 ============
 
@@ -33,9 +34,6 @@ abstract contract VerifierBase is IVerifier {
 
     // ============ 不可变量 ============
 
-    /// @notice USDC 代币地址
-    address public immutable USDC;
-
     /// @notice EIP-712 域分隔符（由 name + version + chainId + address 在构造时计算）
     bytes32 public immutable override DOMAIN_SEPARATOR;
 
@@ -55,11 +53,11 @@ abstract contract VerifierBase is IVerifier {
     }
 
     // ============ 构造函数 ============
-    // 初始化 USDC 地址、owner（部署者）、名称，并计算 EIP-712 DOMAIN_SEPARATOR。
+    // 初始化 owner（部署者）、名称，并计算 EIP-712 DOMAIN_SEPARATOR。
+    // feeToken 通过 setFeeToken() 在部署后一次性设置（跨链统一地址）。
 
-    constructor(address usdc_, string memory name_, string memory version_) {
-        if (usdc_ == address(0)) revert ZeroAddress();
-        USDC = usdc_;
+    constructor(string memory name_, string memory version_) {
+        _setInitializer();
         owner = msg.sender;
         _name = name_;
         DOMAIN_SEPARATOR = keccak256(
@@ -98,9 +96,9 @@ abstract contract VerifierBase is IVerifier {
         string calldata reason,
         uint256 expectedFee
     ) external override onlyOwner {
-        uint256 balBefore = IERC20(USDC).balanceOf(address(this));
+        uint256 balBefore = IERC20(feeToken).balanceOf(address(this));
         IDeal(dealContract).onVerificationResult(dealIndex, verificationIndex, result, reason);
-        if (IERC20(USDC).balanceOf(address(this)) - balBefore < expectedFee) revert FeeNotReceived();
+        if (IERC20(feeToken).balanceOf(address(this)) - balBefore < expectedFee) revert FeeNotReceived();
     }
 
     /// @inheritdoc IVerifier
@@ -129,6 +127,6 @@ abstract contract VerifierBase is IVerifier {
     /// @notice 从此合约提取 USDC（仅 owner）
     function withdrawFees(address to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        if (!IERC20(USDC).transfer(to, amount)) revert WithdrawFailed();
+        if (!IERC20(feeToken).transfer(to, amount)) revert WithdrawFailed();
     }
 }

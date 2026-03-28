@@ -29,9 +29,8 @@ contract XQuoteVerifier is VerifierBase {
 
     // ============ 构造函数 ============
 
-    /// @param usdc_ USDC 代币地址
     /// @param specAddress 已部署的 XQuoteVerifierSpec 合约地址
-    constructor(address usdc_, address specAddress) VerifierBase(usdc_, "XQuoteVerifier", "1") {
+    constructor(address specAddress) VerifierBase("XQuoteVerifier", "1") {
         require(specAddress != address(0), "spec cannot be zero");
         SPEC = specAddress;
     }
