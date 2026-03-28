@@ -1,4 +1,4 @@
-"""On-chain interaction — reportResult submission + getVerificationParams read."""
+"""On-chain interaction — reportResult submission + verificationParams read."""
 
 from __future__ import annotations
 
@@ -28,14 +28,14 @@ VERIFIER_ABI = [
     },
 ]
 
-# IDealContract.getVerificationParams(uint256 dealIndex, uint256 verificationIndex)
+# IDeal.verificationParams(uint256 dealIndex, uint256 verificationIndex)
 DEAL_CONTRACT_ABI = [
     {
         "inputs": [
             {"name": "dealIndex", "type": "uint256"},
             {"name": "verificationIndex", "type": "uint256"},
         ],
-        "name": "getVerificationParams",
+        "name": "verificationParams",
         "outputs": [
             {"name": "verifier", "type": "address"},
             {"name": "fee", "type": "uint256"},
@@ -67,7 +67,7 @@ def _init():
 
 
 def report_result(deal_contract: str, deal_index: int, verification_index: int, result: int, reason: str, expected_fee: int) -> str:
-    """Call contract reportResult, which callbacks DealContract.onReportResult. Returns tx hash.
+    """Call contract reportResult, which callbacks DealContract.onVerificationResult. Returns tx hash.
 
     expected_fee: the agreed verification fee read from on-chain (USDC raw value); the contract verifies that DealContract has paid this amount.
     """
@@ -108,11 +108,11 @@ def report_result(deal_contract: str, deal_index: int, verification_index: int, 
 
 
 # ---------------------------------------------------------------------------
-# Read DealContract's getVerificationParams (on-chain view call, authoritative source)
+# Read DealContract's verificationParams (on-chain view call, authoritative source)
 # ---------------------------------------------------------------------------
 
 def read_verification_params(deal_contract_addr: str, deal_index: int, verification_index: int) -> dict:
-    """Read verification parameters via getVerificationParams (authoritative source).
+    """Read verification parameters via verificationParams (authoritative source).
 
     Returns common fields; specParams remains as raw bytes for the caller to decode per spec definition.
 
@@ -128,7 +128,7 @@ def read_verification_params(deal_contract_addr: str, deal_index: int, verificat
     addr = Web3.to_checksum_address(deal_contract_addr)
     deal_obj = w3.eth.contract(address=addr, abi=DEAL_CONTRACT_ABI)
 
-    verifier, fee, deadline, sig, spec_params = deal_obj.functions.getVerificationParams(
+    verifier, fee, deadline, sig, spec_params = deal_obj.functions.verificationParams(
         deal_index, verification_index
     ).call()
 

@@ -120,7 +120,7 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
     """Handle a verification notification.
 
     Received: {"action": "notify_verify", "dealContract": "0x...", "dealIndex": 5, "verificationIndex": 0}
-    Flow: Read authoritative params from on-chain getVerificationParams -> off-chain verification -> on-chain reportResult
+    Flow: Read authoritative params from on-chain verificationParams -> off-chain verification -> on-chain reportResult
     Response: {"action": "result", "dealIndex": 5, "verificationIndex": 0, "result": 1/-1, "txHash": "0x..."}
     """
     deal_contract = content.get("dealContract")
@@ -132,7 +132,7 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
         return
 
     try:
-        # 1. Read authoritative verification params from on-chain getVerificationParams
+        # 1. Read authoritative verification params from on-chain verificationParams
         on_chain = read_verification_params(deal_contract, int(deal_index), int(verification_index))
         on_chain_verifier = on_chain["verifier"].lower()
         if on_chain_verifier != settings.contract_address.lower():

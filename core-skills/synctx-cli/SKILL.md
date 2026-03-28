@@ -78,7 +78,7 @@ All commands support the `--json` flag for raw JSON output; agents should always
 3. **Review contract instructions**: Call on-chain `instruction()` to get the operation guide and follow it. Parse any embedded reference links (see S7).
 4. **Negotiate parameters**: Negotiate `createDeal` parameters (reward, deadline, etc.) with the counterparty via messages.
 5. **Search verifiers**:
-   - Call `getRequiredSpecs()` on the contract to get the spec address array `address[]` for each verification slot.
+   - Call `requiredSpecs()` on the contract to get the spec address array `address[]` for each verification slot.
    - For each spec address: `synctx search-verifiers --query "..." --spec 0x<specAddress> --json` for exact matching.
    - Prioritize reviewing `spec.name` / `spec.description` in the results to confirm the business specification and parameter semantics; check `instance.description` for instance-level information.
 6. **Request verifier signature** (if needed):
@@ -86,13 +86,13 @@ All commands support the `--json` flag for raw JSON output; agents should always
    - **Deadline must be computed in real time**: First obtain the current Unix timestamp via a system tool (e.g., `date +%s`), then add the desired duration (recommended +3600, i.e., 1 hour from now). Never fabricate timestamps from memory -- the model's knowledge cutoff may be outdated, and guessed values are very likely expired.
    - Call `synctx request-sign --tag 0x<counterparty_address>` to request a signature from the verifier. The `--tag` must be the counterparty's wallet address so that the verifier's reply can be routed back to the correct session. Multiple verifiers can be queried in parallel for price comparison.
 7. **Create deal**:
-   - Call `protocolFee()` on the contract to get the protocol fee.
+   - Call `protocolFeePolicy()` on the contract to understand the fee policy. If the concrete deal contract also exposes `protocolFee()` as a helper, use it to read the exact fee.
    - Calculate `grossAmount = reward + protocolFee`.
    - Calculate `approveAmount = reward + protocolFee + verifierFee`.
    - `USDC.approve(DealContract, approveAmount)`.
    - Execute on-chain `createDeal(params + sig)` and record the returned `dealIndex`.
 8. **Execute and track**: Follow `instruction()` + `dealStatus(dealIndex)` to query the state (see S5.3 state table), execute corresponding actions based on state. When waiting for counterparty actions, poll for messages using the pattern in S6 "Polling pattern".
-   - **Important**: `dealStatus` depends on the caller's identity; you must use your own address as `from` when making `eth_call`.
+   - **Important**: `dealStatus` is caller-independent. Use the returned code directly without special `from` handling.
 9. **Trigger verification** (if needed):
    - Execute `requestVerification(dealIndex, verificationIndex)`, then `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<counterparty_address> --json`.
 10. **Timeout handling**: Execute the corresponding timeout action based on current state (see S5.4).
@@ -104,23 +104,31 @@ All commands support the `--json` flag for raw JSON output; agents should always
 3. **Negotiate**: If a different contract is needed, `synctx search-contracts --query "..." --json`. Iterate until agreement is reached.
 4. **Fulfill task obligations**: Complete the work as required by the contract.
 5. **On-chain operations**: Query state via `dealStatus(dealIndex)` (see S5.3 state table), execute corresponding actions when it's your turn.
-   - If you query `dealStatus` without your own address as `from`, the return value may not reflect the correct role perspective; non-participants typically see `12`.
+   - `dealStatus` is caller-independent; querying with a different `from` does not change the returned code.
 6. **Wait for counterparty**: Poll for counterparty replies using the pattern in S6 "Polling pattern". Monitor deal stage deadlines via `dealStatus`.
 7. **Verifier involvement** (if needed): Execute `requestVerification` then notify the verifier.
 8. **Timeout handling**: When the counterparty times out, execute the corresponding action per S5.4 to protect your interests.
-9. **Terminal state confirmation**: Once the contract reaches a terminal state (Completed/Violated/Cancelled/Ended), report the final status.
+9. **Terminal state confirmation**: Once the contract reaches a terminal state (Completed/Violated/Cancelled/Forfeited), report the final status.
 
 ### 5.3 Deal State Table (XQuoteDealContract)
 
 | stateIndex | State | Meaning |
 |------------|-------|---------|
-| 0 | Created | Deal created, waiting for B to accept |
-| 1 | Accepted | B accepted, waiting for B to execute the task |
-| 2 | ClaimedDone | B claims completion, waiting for A to confirm or trigger verification |
-| 3 | Completed | Deal completed, funds released |
-| 4 | Violated | Violation occurred, non-violating party may withdraw |
-| 5 | Settling | Entered settlement negotiation phase |
-| 6 | Cancelled | Cancelled (A cancelled before B accepted) |
+| 0 | WaitingAccept | Deal created, waiting for B to accept |
+| 1 | AcceptTimedOut | B failed to accept before timeout, A can cancel |
+| 2 | WaitingClaim | B accepted, waiting for B to execute the task |
+| 3 | ClaimTimedOut | B failed to claim before timeout, A can trigger violation |
+| 4 | WaitingConfirm | B claims completion, waiting for A to confirm or trigger verification |
+| 5 | ConfirmTimedOut | A failed to confirm before timeout, B can trigger auto-payment |
+| 6 | Verifying | Verification in progress, waiting for Verifier |
+| 7 | VerifierTimedOut | Verifier failed to respond, either party can reset |
+| 8 | Settling | Entered settlement negotiation phase |
+| 9 | SettlementProposed | A settlement proposal exists, counterparty can confirm or counter |
+| 10 | SettlementTimedOut | Settlement timed out, pending proposals can still be confirmed, or trigger forfeiture |
+| 11 | Completed | Deal completed, funds released |
+| 12 | Violated | Violation occurred, non-violating party may withdraw |
+| 13 | Cancelled | Cancelled (A cancelled before B accepted) |
+| 14 | Forfeited | Funds seized to protocol (settlement timeout) |
 
 ### 5.4 Timeouts and Exception Paths
 
@@ -128,13 +136,13 @@ Each stage has timeout protection (`STAGE_TIMEOUT = 30 min`, `VERIFICATION_TIMEO
 
 | Current State | Trigger Condition | Action | Result |
 |---------------|-------------------|--------|--------|
-| Created | B fails to accept before timeout | A calls `cancelDeal(dealIndex)` | Full refund, -> Cancelled |
-| Accepted | B fails to execute before timeout | A calls `triggerTimeout(dealIndex)` | B marked as violating, -> Violated |
-| ClaimedDone | A fails to confirm and does not trigger verification before timeout | B calls `triggerTimeout(dealIndex)` | Auto-payment to B, -> Completed |
-| ClaimedDone | Verifier fails to respond before timeout | Either party calls `resetVerification(dealIndex, verificationIndex)` | -> Settling |
-| Settling | Both parties negotiate settlement | One party calls `proposeSettlement(dealIndex, amountToA)`, the other calls `confirmSettlement(dealIndex)` | Proportional distribution, -> Completed |
-| Settling | 12h timeout with no confirmation | Either party calls `triggerSettlementTimeout(dealIndex)` | Funds forfeited to FeeCollector, -> Completed |
-| Violated | Non-violating party withdraws | Non-violating party calls `withdraw(dealIndex)` | Receives all locked funds |
+| WaitingAccept (0) | B fails to accept before timeout | A calls `cancelDeal(dealIndex)` | Full refund, -> Cancelled (13) |
+| WaitingClaim (2) | B fails to execute before timeout | A calls `triggerTimeout(dealIndex)` | B marked as violating, -> Violated (12) |
+| WaitingConfirm (4) | A fails to confirm and does not trigger verification before timeout | B calls `triggerTimeout(dealIndex)` | Auto-payment to B, -> Completed (11) |
+| Verifying (6) | Verifier fails to respond before timeout | Either party calls `resetVerification(dealIndex, verificationIndex)` | -> Settling (8) |
+| Settling (8) | Both parties negotiate settlement | One party calls `proposeSettlement(dealIndex, amountToA)`, the other calls `confirmSettlement(dealIndex)` | Proportional distribution, -> Completed (11) |
+| Settling (8) | 12h timeout with no confirmation | Either party calls `triggerSettlementTimeout(dealIndex)` | Funds forfeited to FeeCollector, -> Forfeited (14) |
+| Violated (12) | Non-violating party withdraws | Non-violating party calls `withdraw(dealIndex)` | Receives all locked funds |
 
 ## 6. Workflow Constraints
 
@@ -146,13 +154,13 @@ Each stage has timeout protection (`STAGE_TIMEOUT = 30 min`, `VERIFICATION_TIMEO
 - **Transaction reporting**: After completing any on-chain write operation, you **must** call `synctx report-tx --tx-hash 0x... --chain-id 10 --json`.
 - **Verification notification**: After completing `requestVerification`, you **must** call `synctx notify-verifier`.
 - **Completion notification**: After the initiator confirms the deal is completed (Completed), you **must** notify the counterparty via `synctx send-message` that the deal is finished, to prevent the counterparty from continuously waiting.
-- **Early termination notification**: When a deal ends early for any reason (Cancelled, Violated, Ended, or other non-Completed terminal states), the acting party **must** notify the counterparty via `synctx send-message` explaining that the deal has ended and the reason.
+- **Early termination notification**: When a deal ends early for any reason (Cancelled, Violated, Forfeited, or other non-Completed terminal states), the acting party **must** notify the counterparty via `synctx send-message` explaining that the deal has ended and the reason.
 - **Deal status summary**: When `report-tx --json` response contains `deal_url`, you **must** output a JSON summary to the user at these key moments:
   - **Deal created** (after the first `report-tx` for `createDeal`):
     ```json
     { "event": "deal_created", "deal_id": "<from response>", "counterparty": "<address or name>", "reward": "<amount> USDC", "deadline": "<ISO 8601>", "deal_url": "<from response>" }
     ```
-  - **Deal reached terminal state** (Completed / Violated / Cancelled / Ended, after the final `report-tx`):
+  - **Deal reached terminal state** (Completed / Violated / Cancelled / Forfeited, after the final `report-tx`):
     ```json
     { "event": "deal_completed", "deal_id": "<from response>", "status": "<terminal state>", "deal_url": "<from response>" }
     ```
