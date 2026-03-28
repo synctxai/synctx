@@ -34,50 +34,25 @@ abstract contract DealBase is IDeal {
         return 1;
     }
 
-    // ===================== 防篡改统计 =====================
-    // 使用 private 存储，子合约无法直接读写。
-    // 只能通过 internal 辅助函数递增，保证统计数据的真实性。
-    // 这些数据是平台信誉系统的基础。
+    // ===================== Deal 索引计数器 =====================
 
-    /// @dev private → 子合约无法直接读写
-    uint256 private _startCount;
-    uint256 private _activatedCount;
-    uint256 private _endCount;
-    uint256 private _disputeCount;
+    /// @dev 下一个 deal 的索引，由 _recordStart 自增
+    uint256 private _nextDealIndex;
 
     /// @dev 记录新交易创建
     /// @param traders 参与交易的地址数组
     /// @param verifiers 验证者地址数组（无验证则传空数组）
     /// @return dealIndex 新交易的索引（自增前的值）
     function _recordStart(address[] memory traders, address[] memory verifiers) internal returns (uint256 dealIndex) {
-        dealIndex = _startCount++;
+        dealIndex = _nextDealIndex++;
         emit DealCreated(dealIndex, traders, verifiers);
     }
 
-    /// @dev 记录交易激活（所有参与方已确认）
+    /// @dev 发出 Phase 变更事件
     /// @param dealIndex 交易索引
-    function _recordActivated(uint256 dealIndex) internal {
-        _activatedCount++;
-        emit DealActivated(dealIndex);
-    }
-
-    /// @dev 记录交易正常结束
-    /// @param dealIndex 交易索引
-    function _recordEnd(uint256 dealIndex) internal {
-        _endCount++;
-        emit DealEnded(dealIndex);
-    }
-
-    /// @dev 记录交易以争议结束
-    function _recordDispute(uint256 dealIndex) internal {
-        _disputeCount++;
-        emit DealDisputed(dealIndex);
-    }
-
-    /// @dev 记录交易取消（激活前，不影响统计计数）
-    /// @param dealIndex 交易索引
-    function _recordCancelled(uint256 dealIndex) internal {
-        emit DealCancelled(dealIndex);
+    /// @param toPhase 目标 phase：2=Active, 3=Success, 4=Failed, 5=Cancelled
+    function _emitPhaseChanged(uint256 dealIndex, uint8 toPhase) internal {
+        emit DealPhaseChanged(dealIndex, toPhase);
     }
 
     /// @dev 发出状态变更通知
@@ -90,28 +65,9 @@ abstract contract DealBase is IDeal {
         emit DealViolated(dealIndex, violator);
     }
 
-    // ===================== 统计查询 =====================
-    // 无 virtual → 子合约不可篡改返回值
-
-    function startCount() external view returns (uint256) {
-        return _startCount;
-    }
-
-    function activatedCount() external view returns (uint256) {
-        return _activatedCount;
-    }
-
-    function endCount() external view returns (uint256) {
-        return _endCount;
-    }
-
-    function disputeCount() external view returns (uint256) {
-        return _disputeCount;
-    }
-
     // ===================== 抽象方法 =====================
     // 子合约必须覆盖以下所有方法。
-    // onReportResult 默认 revert — 不使用验证的合约无需覆盖。
+    // onVerificationResult 默认 revert — 不使用验证的合约无需覆盖。
 
     function name() external pure virtual returns (string memory);
 
@@ -145,7 +101,7 @@ abstract contract DealBase is IDeal {
     function requestVerification(uint256 dealIndex, uint256 verificationIndex) external virtual;
 
     /// @dev 子合约必须覆盖以处理验证结果。默认 revert，不使用验证的合约无需覆盖。
-    function onReportResult(uint256, uint256, int8, string calldata) external virtual {
+    function onVerificationResult(uint256, uint256, int8, string calldata) external virtual {
         revert("not implemented");
     }
 }

@@ -25,15 +25,8 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 |--------|------------|--------------|------------|----------------|-------------|
 | `interfaceVersion()` | — | `string` | IDealContract | DealContractBase | Returns `"1.0"`. `pure`, cannot be overridden |
 | `supportsInterface(id)` | `bytes4 id` | `bool` | IDealContract | DealContractBase | ERC-165. `pure`, cannot be overridden |
-| `startCount()` | — | `uint256` | IDealContract | DealContractBase | Total number of deals created. Private storage, subclasses cannot tamper. `view` |
-| `activatedCount()` | — | `uint256` | IDealContract | DealContractBase | Number of activated deals. `view` |
-| `endCount()` | — | `uint256` | IDealContract | DealContractBase | Number of normally ended deals. `view` |
-| `disputeCount()` | — | `uint256` | IDealContract | DealContractBase | Number of disputed deals. `view` |
-| `_recordStart(...)` | `address[] traders, address[] verifiers` | `uint256 dealIndex` | DealContractBase | DealContractBase | Internal utility. Emits DealCreated, startCount++ |
-| `_recordActivated(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealActivated, activatedCount++ |
-| `_recordEnd(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealEnded, endCount++ |
-| `_recordDispute(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealDisputed, disputeCount++ |
-| `_recordCancelled(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealCancelled, does not affect any counters |
+| `_recordStart(...)` | `address[] traders, address[] verifiers` | `uint256 dealIndex` | DealContractBase | DealContractBase | Internal utility. Emits DealCreated, returns dealIndex |
+| `_emitPhaseChanged(dealIndex, toPhase)` | `uint256 dealIndex, uint8 toPhase` | — | DealContractBase | DealContractBase | Internal utility. Emits DealPhaseChanged. phase: 2=Active, 3=Success, 4=Failed, 5=Cancelled |
 | `_emitStateChanged(...)` | `uint256 dealIndex, uint8 stateIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealStateChanged |
 | `_emitViolated(...)` | `uint256 dealIndex, address violator` | — | DealContractBase | DealContractBase | Internal utility. Emits DealViolated |
 | `contractName()` | — | `string` | IDealContract | XQuoteDealContract | Returns `"XQuoteDealContract"`. `pure` |
@@ -87,13 +80,10 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 
 | Event Name | Parameters | Implemented In | Trigger Timing | Description |
 |------------|------------|----------------|----------------|-------------|
-| `DealCreated` | `uint256 dealIndex, address[] traders, address[] verifiers` | DealContractBase (`_recordStart`) | When `createDeal` succeeds | startCount++. traders and verifiers record the participants |
+| `DealCreated` | `uint256 dealIndex, address[] traders, address[] verifiers` | DealContractBase (`_recordStart`) | When `createDeal` succeeds | traders and verifiers record the participants |
 | `DealStateChanged` | `uint256 dealIndex, uint8 stateIndex` | DealContractBase (`_emitStateChanged`) | On every state change | stateIndex corresponds to the State enum value. SyncTx uses this + instruction() to infer who needs to act |
-| `DealActivated` | `uint256 dealIndex` | DealContractBase (`_recordActivated`) | When `accept` succeeds | activatedCount++. All participants have confirmed |
-| `DealCancelled` | `uint256 dealIndex` | DealContractBase (`_recordCancelled`) | On `cancelDeal` (Created timeout cancellation) | Does not affect any counters. B has not accepted yet, so it does not constitute a violation |
+| `DealPhaseChanged` | `uint256 indexed dealIndex, uint8 indexed phase` | DealContractBase (`_emitPhaseChanged`) | On phase transitions: accept (2), normal completion (3), violation (4), cancellation (5) | phase: 2=Active, 3=Success, 4=Failed, 5=Cancelled |
 | `DealViolated` | `uint256 dealIndex, address violator` | DealContractBase (`_emitViolated`) | triggerTimeout (Accepted stage) / verification failure (result<0) | violator is the address of the violating party |
-| `DealDisputed` | `uint256 dealIndex` | DealContractBase (`_recordDispute`) | On violation (triggerTimeout / verification failure), after DealViolated | disputeCount++ |
-| `DealEnded` | `uint256 dealIndex` | DealContractBase (`_recordEnd`) | On normal completion (confirmAndPay / verification passed / timeout auto-payment / negotiated distribution / negotiation timeout seizure) | endCount++ |
 | `VerifyRequest` | `uint256 dealIndex, uint256 verificationIndex, address verifier` | XQuoteDealContract (`requestVerification`) | When `requestVerification` succeeds | Also transfers verification fee to contract escrow. Verifier calls getVerificationParams after receiving notification |
 | `VerificationReceived` | `uint256 dealIndex, uint256 verificationIndex, address verifier, int8 result` | XQuoteDealContract (`onReportResult`) | When Verifier reports result | Emitted in the onReportResult callback |
 | `DealCompleted` | `uint256 dealIndex, uint256 amount` | XQuoteDealContract | confirmAndPay / verification passed (result>0) / ClaimedDone timeout auto-payment | Normal payment completion |
@@ -211,7 +201,7 @@ sequenceDiagram
 
     Note over B: Verify transaction content via tx_hash:<br/>1. Get receipt, parse DealCreated event to confirm dealIndex<br/>2. Parse tx calldata, decode createDeal params with DealContract ABI<br/>3. Compare each field against negotiated terms (partyB, amount, verifier, etc.)
     B->>D: 🟢 accept(dealIndex)
-    Note over D: 🔵 DealActivated(dealIndex)<br/>🔵 DealStateChanged(dealIndex, 1)
+    Note over D: 🔵 DealPhaseChanged(dealIndex, 2)<br/>🔵 DealStateChanged(dealIndex, 1)
     B->>P: 🟣 report_transaction(tx_hash, chain_id)
     B->>P: 🟣 send_message [notify A: accepted]
     P-->>A: async message
@@ -226,7 +216,7 @@ sequenceDiagram
 
     alt A confirms after local verification
         A->>D: 🟢 confirmAndPay(dealIndex)
-        Note over D: USDC.transfer(B, reward)<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)
+        Note over D: USDC.transfer(B, reward)<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealPhaseChanged(dealIndex, 3)
         A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
     else A initiates Verifier verification
@@ -245,9 +235,9 @@ sequenceDiagram
         Note over D: onReportResult callback<br/>🔵 VerificationReceived(dealIndex, verificationIndex, verifier, result)
 
         alt result > 0 verification passed
-            Note over D: Release payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)
+            Note over D: Release payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealPhaseChanged(dealIndex, 3)
         else result < 0 verification failed
-            Note over D: B violated<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStateChanged(dealIndex, 4)<br/>🔵 DealDisputed(dealIndex)
+            Note over D: B violated<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStateChanged(dealIndex, 4)<br/>🔵 DealPhaseChanged(dealIndex, 4)
         else result == 0 inconclusive
             Note over D: 🔵 DealStateChanged(dealIndex, 5)
         end
@@ -330,7 +320,7 @@ sequenceDiagram
 
     Note over A,D: Created state, B did not accept within STAGE_TIMEOUT
     A->>D: 🟢 cancelDeal(dealIndex)
-    Note over D: USDC refunded to A<br/>🔵 DealCancelled(dealIndex)<br/>🔵 DealStateChanged(dealIndex, 6)<br/>→ State becomes Cancelled
+    Note over D: USDC refunded to A<br/>🔵 DealPhaseChanged(dealIndex, 5)<br/>🔵 DealStateChanged(dealIndex, 6)<br/>→ State becomes Cancelled
 ```
 
 ### 7.3 Accepted → Timeout (B did not claimDone)
@@ -342,7 +332,7 @@ sequenceDiagram
 
     Note over A,D: Accepted state, B did not claimDone within STAGE_TIMEOUT
     A->>D: 🟢 triggerTimeout(dealIndex)
-    Note over D: B marked as violating party<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStateChanged(dealIndex, 4)<br/>🔵 DealDisputed(dealIndex)<br/>→ State becomes Violated
+    Note over D: B marked as violating party<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStateChanged(dealIndex, 4)<br/>🔵 DealPhaseChanged(dealIndex, 4)<br/>→ State becomes Violated
     A->>D: 🟢 withdraw(dealIndex)
     Note over D: A recovers locked funds
 ```
@@ -356,7 +346,7 @@ sequenceDiagram
 
     Note over B,D: ClaimedDone state, A did not<br/>confirmAndPay or requestVerification within STAGE_TIMEOUT
     B->>D: 🟢 triggerTimeout(dealIndex)
-    Note over D: Auto-payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)<br/>→ State becomes Completed
+    Note over D: Auto-payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealPhaseChanged(dealIndex, 3)<br/>→ State becomes Completed
 ```
 
 > **Note:** If A has already called requestVerification (verificationRequested = true), B cannot call triggerTimeout and must wait for the Verifier to respond or for Verifier timeout followed by resetVerification.
@@ -386,7 +376,7 @@ sequenceDiagram
     A->>D: 🟢 proposeSettlement(dealIndex, amountToA)
     Note over D: 🔵 SettlementProposed(dealIndex, A, amountToA)<br/>remainder = amount - amountToA goes to B
     B->>D: 🟢 confirmSettlement(dealIndex)
-    Note over D: Proportional fund distribution<br/>USDC.transfer(A, amountToA)<br/>USDC.transfer(B, remainder)<br/>🔵 SettlementConfirmed(dealIndex)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)<br/>→ State becomes Completed
+    Note over D: Proportional fund distribution<br/>USDC.transfer(A, amountToA)<br/>USDC.transfer(B, remainder)<br/>🔵 SettlementConfirmed(dealIndex)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealPhaseChanged(dealIndex, 3)<br/>→ State becomes Completed
 ```
 
 > The proposer cannot confirm their own proposal; the counterparty can reject and propose a new plan (overwriting the previous proposal).
@@ -400,7 +390,7 @@ sequenceDiagram
 
     Note over X,D: Settling state, both parties did not reach agreement within SETTLING_TIMEOUT (12h)
     X->>D: 🟢 triggerSettlementTimeout(dealIndex)
-    Note over D: Funds seized to FeeCollector<br/>🔵 FundsSeized(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)<br/>→ State becomes Completed
+    Note over D: Funds seized to FeeCollector<br/>🔵 FundsSeized(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealPhaseChanged(dealIndex, 3)<br/>→ State becomes Completed
 ```
 
 > Anyone can trigger this (no permission restrictions), incentivizing timely negotiation.
@@ -509,6 +499,6 @@ At Verifier timeout resetVerification:
 | 2 | Emit `VerificationReceived(dealIndex, verificationIndex, msg.sender, result)` | — |
 | 3 | Transfer escrowed verification fee to Verifier contract | — |
 | 4 | Handle business logic based on result: | — |
-|   | `result > 0` (passed): release payment to B → DealCompleted → DealStateChanged(3) → `_recordEnd` → DealEnded | — |
-|   | `result < 0` (failed): `_emitViolated(dealIndex, partyB)` → DealStateChanged(4) → `_recordDispute` → DealDisputed | — |
+|   | `result > 0` (passed): release payment to B → DealCompleted → DealStateChanged(3) → `_emitPhaseChanged` → DealPhaseChanged(dealIndex, 3) | — |
+|   | `result < 0` (failed): `_emitViolated(dealIndex, partyB)` → DealStateChanged(4) → `_emitPhaseChanged` → DealPhaseChanged(dealIndex, 4) | — |
 |   | `result == 0` (inconclusive): SettlingStarted → DealStateChanged(5) → enter Settling | — |
