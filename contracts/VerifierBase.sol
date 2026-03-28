@@ -9,21 +9,26 @@ import "./Initializable.sol";
 /// @title VerifierBase - 验证者抽象基类
 /// @notice 提供通用的验证者功能：owner 管理、DOMAIN_SEPARATOR、结果提交、费用提取。
 /// @dev check() 和 EIP-712 验证逻辑在 VerifierSpec 合约中，不在此处。
-///      VerifierBase 暴露 DOMAIN_SEPARATOR（public immutable）和 owner（public）
+///      VerifierBase 暴露 DOMAIN_SEPARATOR（public immutable）和 signer（public）
 ///      供 Spec 的 check() 读取。
+///      角色分离：owner（cold key）管理合约和提取费用，signer（hot key）签名和提交结果。
 abstract contract VerifierBase is IVerifier, Initializable {
 
     // ============ 错误 ============
 
     error NotOwner();          // 调用者不是 owner
+    error NotSigner();         // 调用者不是 signer
     error ZeroAddress();       // 地址为零
     error WithdrawFailed();    // 提取费用失败
-    error NewOwnerIsContract();// 新 owner 不能是合约地址（必须是 EOA）
+    error SignerMustBeEOA();   // signer 必须是 EOA（用于 EIP-712 签名）
+    error NoPendingOwner();    // 没有待确认的 pendingOwner
     error FeeNotReceived();    // DealContract 未支付预期的验证费
 
     // ============ 事件 ============
 
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event SignerChanged(address indexed previousSigner, address indexed newSigner);
 
     // ============ 常量 ============
     // EIP-712 域类型哈希，用于构造 DOMAIN_SEPARATOR。
@@ -42,13 +47,24 @@ abstract contract VerifierBase is IVerifier, Initializable {
 
     // ============ 状态 ============
 
-    /// @notice 合约 owner（签名和调用 reportResult 的 EOA）
+    /// @notice 合约 owner（cold key：管理合约、提取费用）
     address public override owner;
+
+    /// @notice 签名者（hot key：签 EIP-712 报价、提交验证结果）
+    address public override signer;
+
+    /// @notice Ownable2Step：待确认的新 owner
+    address public pendingOwner;
 
     // ============ 修饰器 ============
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    modifier onlySigner() {
+        if (msg.sender != signer) revert NotSigner();
         _;
     }
 
@@ -59,6 +75,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
     constructor(string memory name_, string memory version_) {
         _setInitializer();
         owner = msg.sender;
+        signer = msg.sender;
         _name = name_;
         DOMAIN_SEPARATOR = keccak256(
             abi.encode(
@@ -71,21 +88,39 @@ abstract contract VerifierBase is IVerifier, Initializable {
         );
     }
 
-    // ============ Owner 管理 ============
-    // 只有当前 owner 可以转移所有权。新 owner 必须是 EOA（不能是合约）。
+    // ============ Owner 管理（Ownable2Step） ============
+    // 两步转移：transferOwnership 设置 pendingOwner，acceptOwnership 确认生效。
+    // owner 可以是 EOA 或合约（如 multisig），signer 必须是 EOA。
 
+    /// @notice 发起所有权转移（第一步）
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
-        if (newOwner.code.length > 0) revert NewOwnerIsContract();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    /// @notice 接受所有权转移（第二步，由 pendingOwner 调用）
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NoPendingOwner();
         address oldOwner = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(oldOwner, newOwner);
+        owner = msg.sender;
+        pendingOwner = address(0);
+        emit OwnershipTransferred(oldOwner, msg.sender);
+    }
+
+    /// @notice 更换签名者（仅 owner）
+    function setSigner(address newSigner) external onlyOwner {
+        if (newSigner == address(0)) revert ZeroAddress();
+        if (newSigner.code.length > 0) revert SignerMustBeEOA();
+        address oldSigner = signer;
+        signer = newSigner;
+        emit SignerChanged(oldSigner, newSigner);
     }
 
     // ============ IVerifier 实现 ============
 
     /// @inheritdoc IVerifier
-    /// @dev 通过检查 onVerificationResult 调用前后的 USDC 余额变化来确认 DealContract 已支付验证费。
+    /// @dev 通过检查 onVerificationResult 调用前后的 feeToken 余额变化来确认 DealContract 已支付验证费。
     ///      如果余额增加量 < expectedFee，交易 revert，验证结果不会被提交。
     ///      这保证了 Verifier 提交结果 = 收到费用，两者原子性完成。
     function reportResult(
@@ -95,7 +130,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
         int8 result,
         string calldata reason,
         uint256 expectedFee
-    ) external override onlyOwner {
+    ) external override onlySigner {
         uint256 balBefore = IERC20(feeToken).balanceOf(address(this));
         IDeal(dealContract).onVerificationResult(dealIndex, verificationIndex, result, reason);
         if (IERC20(feeToken).balanceOf(address(this)) - balBefore < expectedFee) revert FeeNotReceived();

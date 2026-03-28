@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 /// @title IVerifier - 验证者合约标准接口 (v3)
 /// @notice 所有验证者合约必须实现此接口。
 /// @dev check() 不属于 IVerifier — 它属于 VerifierSpec 合约。
-///      VerifierBase 暴露 DOMAIN_SEPARATOR（public）和 owner（public）供 Spec 的 check() 读取。
+///      VerifierBase 暴露 DOMAIN_SEPARATOR（public）和 signer（public）供 Spec 的 check() 读取。
 interface IVerifier {
 
     /// @notice 向交易合约提交验证结果
@@ -25,8 +25,11 @@ interface IVerifier {
     /// @notice 验证能力描述（实例级别的自我介绍）
     function description() external view returns (string memory);
 
-    /// @notice 合约 owner（签名和提交结果的 EOA）
+    /// @notice 合约 owner（管理合约、提取费用）
     function owner() external view returns (address);
+
+    /// @notice 签名者 EOA（签 EIP-712 报价、提交验证结果）
+    function signer() external view returns (address);
 
     /// @notice 返回此 Verifier 实现的业务 Spec 合约地址（VerifierSpec 子合约）
     function spec() external view returns (address);

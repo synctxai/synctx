@@ -38,7 +38,7 @@ abstract contract VerifierSpec {
     // ============ EIP-712 共享逻辑 ============
 
     /// @dev 验证 EIP-712 签名：构造 digest，恢复签名者，比对 verifier.owner()
-    /// @param verifierInstance Verifier 合约地址（读取 DOMAIN_SEPARATOR 和 owner）
+    /// @param verifierInstance Verifier 合约地址（读取 DOMAIN_SEPARATOR 和 signer）
     /// @param structHash 由子合约用 TYPEHASH + 业务参数构造的 structHash
     /// @param deadline 签名过期时间（Unix 秒）
     /// @param sig EIP-712 签名（65 字节）
@@ -52,11 +52,11 @@ abstract contract VerifierSpec {
         if (block.timestamp > deadline) revert SignatureExpired();
 
         bytes32 domainSeparator = IVerifier(verifierInstance).DOMAIN_SEPARATOR();
-        address owner_ = IVerifier(verifierInstance).owner();
+        address signer_ = IVerifier(verifierInstance).signer();
 
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        address signer = _recoverSigner(digest, sig);
-        return signer == owner_;
+        address recovered = _recoverSigner(digest, sig);
+        return recovered == signer_;
     }
 
     /// @dev 从 EIP-712 digest 恢复签名者地址。
