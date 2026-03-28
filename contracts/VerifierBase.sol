@@ -48,7 +48,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
     // ============ 状态 ============
 
     /// @notice 合约 owner（cold key：管理合约、提取费用）
-    address public override owner;
+    address public owner;
 
     /// @notice 签名者（hot key：签 EIP-712 报价、提交验证结果）
     address public override signer;

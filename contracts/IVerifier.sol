@@ -25,9 +25,6 @@ interface IVerifier {
     /// @notice 验证能力描述（实例级别的自我介绍）
     function description() external view returns (string memory);
 
-    /// @notice 合约 owner（管理合约、提取费用）
-    function owner() external view returns (address);
-
     /// @notice 签名者 EOA（签 EIP-712 报价、提交验证结果）
     function signer() external view returns (address);
 
