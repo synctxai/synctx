@@ -582,8 +582,8 @@ contract XQuoteDealContract is DealBase, Initializable {
     ) internal view {
         address verifierSpec = IVerifier(verifier).spec();
         if (verifierSpec != REQUIRED_SPEC) revert InvalidSpecAddress();
-        if (!XQuoteVerifierSpec(verifierSpec).check(verifier, tweet_id, canonicalUsername, uint256(fee), deadline, sig))
-            revert InvalidVerifierSignature();
+        address recovered = XQuoteVerifierSpec(verifierSpec).check(verifier, tweet_id, canonicalUsername, uint256(fee), deadline, sig);
+        if (recovered != IVerifier(verifier).signer()) revert InvalidVerifierSignature();
     }
 
     /// @dev 检查当前阶段是否已超时（基于 stageTimestamp）

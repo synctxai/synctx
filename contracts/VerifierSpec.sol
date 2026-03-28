@@ -5,8 +5,9 @@ import "./IVerifier.sol";
 
 /// @title VerifierSpec - 业务验证规范合约基类
 /// @notice 所有 VerifierSpec 合约必须继承此抽象合约。
-/// @dev 提供元数据接口（name/version/description）和 EIP-712 签名验证共享逻辑。
+/// @dev 提供元数据接口（name/version/description）和 EIP-712 签名恢复共享逻辑。
 ///      子合约只需定义 TYPEHASH、check() 参数和元数据覆盖。
+///      Spec 只负责签名格式验证（恢复签名者地址），不负责签名者授权。
 ///
 ///      继承示例：
 ///        abstract contract VerifierSpec
@@ -37,26 +38,23 @@ abstract contract VerifierSpec {
 
     // ============ EIP-712 共享逻辑 ============
 
-    /// @dev 验证 EIP-712 签名：构造 digest，恢复签名者，比对 verifier.owner()
-    /// @param verifierInstance Verifier 合约地址（读取 DOMAIN_SEPARATOR 和 signer）
+    /// @dev 恢复 EIP-712 签名者地址（不做授权判断，由调用方比对）
+    /// @param verifierInstance Verifier 合约地址（读取 DOMAIN_SEPARATOR）
     /// @param structHash 由子合约用 TYPEHASH + 业务参数构造的 structHash
     /// @param deadline 签名过期时间（Unix 秒）
     /// @param sig EIP-712 签名（65 字节）
-    /// @return 签名是否有效
-    function _verifyEIP712(
+    /// @return 签名者地址
+    function _recoverEIP712Signer(
         address verifierInstance,
         bytes32 structHash,
         uint256 deadline,
         bytes calldata sig
-    ) internal view returns (bool) {
+    ) internal view returns (address) {
         if (block.timestamp > deadline) revert SignatureExpired();
 
         bytes32 domainSeparator = IVerifier(verifierInstance).DOMAIN_SEPARATOR();
-        address signer_ = IVerifier(verifierInstance).signer();
-
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        address recovered = _recoverSigner(digest, sig);
-        return recovered == signer_;
+        return _recoverSigner(digest, sig);
     }
 
     /// @dev 从 EIP-712 digest 恢复签名者地址。

@@ -42,17 +42,16 @@ contract XQuoteVerifierSpec is VerifierSpec {
 
     // ============ 签名验证 ============
 
-    /// @notice 验证 X 引用推文的 EIP-712 签名
-    /// @dev 流程：
-    ///      1. 用 TYPEHASH + 业务参数构造 structHash
-    ///      2. 调用 _verifyEIP712 完成签名恢复和 owner 比对
-    /// @param verifierInstance Verifier 合约地址（用于读取 DOMAIN_SEPARATOR 和 owner）
+    /// @notice 恢复 X 引用推文 EIP-712 签名的签名者地址
+    /// @dev 构造 structHash，调用 _recoverEIP712Signer 恢复签名者。
+    ///      调用方负责比对返回地址与 verifier.signer()。
+    /// @param verifierInstance Verifier 合约地址（用于读取 DOMAIN_SEPARATOR）
     /// @param tweet_id 要验证的推文 ID
     /// @param quoter_username 引用者的 X/Twitter 用户名
     /// @param fee 验证费用（USDC，6 位小数）
     /// @param deadline 签名过期时间（Unix 秒）
     /// @param sig EIP-712 签名
-    /// @return 签名是否有效
+    /// @return 签名者地址
     function check(
         address verifierInstance,
         string calldata tweet_id,
@@ -60,7 +59,7 @@ contract XQuoteVerifierSpec is VerifierSpec {
         uint256 fee,
         uint256 deadline,
         bytes calldata sig
-    ) external view returns (bool) {
+    ) external view returns (address) {
         bytes32 structHash = keccak256(abi.encode(
             VERIFY_TYPEHASH,
             keccak256(bytes(tweet_id)),
@@ -69,6 +68,6 @@ contract XQuoteVerifierSpec is VerifierSpec {
             deadline
         ));
 
-        return _verifyEIP712(verifierInstance, structHash, deadline, sig);
+        return _recoverEIP712Signer(verifierInstance, structHash, deadline, sig);
     }
 }
