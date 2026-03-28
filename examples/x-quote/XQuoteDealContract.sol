@@ -60,6 +60,8 @@ contract XQuoteDealContract is DealBase {
     //   COMPLETED     (11)
     //   VIOLATED      (12)
     //   CANCELLED     (13)
+    //   FORFEITED     (14)
+    //   NOT_FOUND    (255)  — deal 不存在
 
     uint8 constant WAITING_ACCEPT       = 0;
     uint8 constant ACCEPT_TIMED_OUT     = 1;
@@ -75,6 +77,8 @@ contract XQuoteDealContract is DealBase {
     uint8 constant COMPLETED            = 11;
     uint8 constant VIOLATED             = 12;
     uint8 constant CANCELLED            = 13;
+    uint8 constant FORFEITED            = 14;
+    uint8 constant NOT_FOUND            = 255;
 
     // ===================== 类型 =====================
 
@@ -259,13 +263,13 @@ contract XQuoteDealContract is DealBase {
         d.status = WAITING_CLAIM;
         d.stageTimestamp = uint48(block.timestamp);
 
-        if (!IERC20(USDC).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
-
         emit ProtocolFeePaid(dealIndex, fee);
         emit DealFeeSplit(dealIndex, d.amount + fee, fee, d.amount);
         _emitPhaseChanged(dealIndex, 2); // → Active
         emit DealAccepted(dealIndex);
         _emitStateChanged(dealIndex, WAITING_CLAIM);
+
+        if (!IERC20(USDC).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
     }
 
     /// @notice B 声称已完成引用推文，提交 quote_tweet_id
@@ -297,11 +301,11 @@ contract XQuoteDealContract is DealBase {
         d.amount = 0;
         d.status = COMPLETED;
 
-        if (!IERC20(USDC).transfer(d.partyB, amt)) revert TransferFailed();
-
         emit DealCompleted(dealIndex, amt);
         _emitStateChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
+
+        if (!IERC20(USDC).transfer(d.partyB, amt)) revert TransferFailed();
     }
 
     // ===================== 取消（WAITING_ACCEPT → CANCELLED） =====================
@@ -351,9 +355,9 @@ contract XQuoteDealContract is DealBase {
         d.isRequesterA = (msg.sender == d.partyA);
         d.verificationTimestamp = uint48(block.timestamp);
 
-        if (!IERC20(USDC).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
-
         emit VerificationRequested(dealIndex, verificationIndex, verifier);
+
+        if (!IERC20(USDC).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
     }
 
     /// @notice Verifier 提交验证结果
@@ -448,6 +452,7 @@ contract XQuoteDealContract is DealBase {
     {
         Deal storage d = deals[dealIndex];
         if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
         if (amountToA > d.amount) revert InvalidSettlement();
 
         settlements[dealIndex] = Settlement({
@@ -477,16 +482,16 @@ contract XQuoteDealContract is DealBase {
 
         delete settlements[dealIndex];
 
+        emit SettlementConfirmed(dealIndex);
+        _emitStateChanged(dealIndex, COMPLETED);
+        _emitPhaseChanged(dealIndex, 3); // → Success
+
         if (toA > 0) {
             if (!IERC20(USDC).transfer(d.partyA, toA)) revert TransferFailed();
         }
         if (toB > 0) {
             if (!IERC20(USDC).transfer(d.partyB, toB)) revert TransferFailed();
         }
-
-        emit SettlementConfirmed(dealIndex);
-        _emitStateChanged(dealIndex, COMPLETED);
-        _emitPhaseChanged(dealIndex, 3); // → Success
     }
 
     /// @notice 协商超时，资金没收到 FeeCollector
@@ -495,21 +500,24 @@ contract XQuoteDealContract is DealBase {
         atStatus(dealIndex, SETTLING)
     {
         Deal storage d = deals[dealIndex];
+        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
         if (block.timestamp <= uint256(d.stageTimestamp) + SETTLING_TIMEOUT) revert SettlementNotTimedOut();
 
         uint96 seized = d.amount;
         d.amount = 0;
-        d.status = COMPLETED;
+        d.status = FORFEITED;
         delete settlements[dealIndex];
 
         if (seized > 0) {
-            if (!IERC20(USDC).transfer(FEE_COLLECTOR, seized)) revert TransferFailed();
             emit FundsSeized(dealIndex, seized);
         }
-
         emit SettlementTimedOutSeized(dealIndex, seized);
-        _emitStateChanged(dealIndex, COMPLETED);
-        _emitPhaseChanged(dealIndex, 3); // → Success
+        _emitStateChanged(dealIndex, FORFEITED);
+        _emitPhaseChanged(dealIndex, 4); // → Failed
+
+        if (seized > 0) {
+            if (!IERC20(USDC).transfer(FEE_COLLECTOR, seized)) revert TransferFailed();
+        }
     }
 
     // ===================== 超时 =====================
@@ -538,10 +546,10 @@ contract XQuoteDealContract is DealBase {
             uint96 amt = d.amount;
             d.amount = 0;
             d.status = COMPLETED;
-            if (!IERC20(USDC).transfer(d.partyB, amt)) revert TransferFailed();
             emit DealCompleted(dealIndex, amt);
             _emitStateChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
+            if (!IERC20(USDC).transfer(d.partyB, amt)) revert TransferFailed();
 
         } else {
             revert InvalidStatus();
@@ -558,9 +566,9 @@ contract XQuoteDealContract is DealBase {
         uint96 amt = d.amount;
         d.amount = 0;
 
-        if (!IERC20(USDC).transfer(msg.sender, amt)) revert TransferFailed();
-
         emit Withdrawn(dealIndex, msg.sender, amt);
+
+        if (!IERC20(USDC).transfer(msg.sender, amt)) revert TransferFailed();
     }
 
     // ===================== 内部辅助函数 =====================
@@ -639,6 +647,7 @@ contract XQuoteDealContract is DealBase {
         uint96  amountToB
     ) {
         Settlement storage stl = settlements[dealIndex];
+        if (stl.proposer == address(0)) return (address(0), 0, 0);
         uint96 total = deals[dealIndex].amount;
         return (stl.proposer, stl.amountToA, total - stl.amountToA);
     }
@@ -757,11 +766,14 @@ contract XQuoteDealContract is DealBase {
             "| 7 | VerifierTimedOut | `resetVerification(dealIndex, 0)` | `resetVerification(dealIndex, 0)` |\n"
             "| 8 | Settling | `proposeSettlement(dealIndex, amountToA)` | `proposeSettlement(dealIndex, amountToA)` |\n"
             "| 9 | SettlementProposed | `confirmSettlement(dealIndex)` or counter-propose | `confirmSettlement(dealIndex)` or counter-propose |\n"
-            "| 10 | SettlementTimedOut | `triggerSettlementTimeout(dealIndex)` | `triggerSettlementTimeout(dealIndex)` |\n"
+            "| 10 | SettlementTimedOut | `confirmSettlement(dealIndex)` or `triggerSettlementTimeout(dealIndex)` | `confirmSettlement(dealIndex)` or `triggerSettlementTimeout(dealIndex)` |\n"
             "| 11 | Completed | -- | -- |\n"
             "| 12 | Violated | Non-violator: `withdraw(dealIndex)` | Non-violator: `withdraw(dealIndex)` |\n"
-            "| 13 | Cancelled | -- | -- |\n\n"
+            "| 13 | Cancelled | -- | -- |\n"
+            "| 14 | Forfeited | -- (funds seized to protocol) | -- (funds seized to protocol) |\n"
+            "| 255 | NotFound | Deal does not exist | Deal does not exist |\n\n"
             "> **Timeouts**: 30 minutes per stage (Settling: 12 hours). Use `timeRemaining(dealIndex)` to query remaining seconds.\n\n"
+            "> **Settlement timeout (code 10)**: After 12 hours, new proposals are blocked. Pending proposals can still be confirmed. Either party can call `triggerSettlementTimeout` to forfeit all funds to the protocol (Forfeited).\n\n"
             "> **Verification flow (code 4)**:\n"
             "> 1. `requestVerification(dealIndex, 0)`\n"
             "> 2. **Must** call `notify_verifier(verifier_address, dealContract, dealIndex, verificationIndex)` to notify the verifier\n"
@@ -781,15 +793,16 @@ contract XQuoteDealContract is DealBase {
         if (s == WAITING_ACCEPT) return 1;   // Pending
         if (s == COMPLETED) return 3;         // Success
         if (s == VIOLATED) return 4;          // Failed
+        if (s == FORFEITED) return 4;         // Failed
         if (s == CANCELLED) return 5;         // Cancelled
         return 2; // Active（WAITING_CLAIM, WAITING_CONFIRM, VERIFYING, SETTLING）
     }
 
     /// @notice 统一业务状态码 — 不依赖 msg.sender，任何人调用结果一致
-    /// @dev 存储的基础值叠加运行时条件（超时、是否有提案）派生出完整状态码 0-13
+    /// @dev 存储的基础值叠加运行时条件（超时、是否有提案）派生出完整状态码 0-14, 255
     function dealStatus(uint256 dealIndex) external view override returns (uint8) {
         Deal storage d = deals[dealIndex];
-        if (d.partyA == address(0)) return COMPLETED; // 不存在的 deal 视为终态
+        if (d.partyA == address(0)) return NOT_FOUND;
 
         uint8 s = d.status;
 
@@ -823,7 +836,7 @@ contract XQuoteDealContract is DealBase {
             return SETTLING;
         }
 
-        // 终态：COMPLETED (11), VIOLATED (12), CANCELLED (13)
+        // 终态：COMPLETED (11), VIOLATED (12), CANCELLED (13), FORFEITED (14)
         return s;
     }
 

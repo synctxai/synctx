@@ -17,7 +17,9 @@ contract XQuoteVerifier is VerifierBase {
 
     // ============ 常量 ============
 
-    /// @notice 此 Verifier 实例接受的最大签名有效期（秒）
+    /// @notice 签名时程序验证 deadline ≤ now + MAX_SIGN_DEADLINE_SECONDS
+    /// @dev 链上不额外校验 — createDeal 的签名验证已隐式保证 deadline 在此范围内。
+    ///      此常量为链下程序提供标准参数。
     uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 3600;
 
     // ============ 不可变量 ============
