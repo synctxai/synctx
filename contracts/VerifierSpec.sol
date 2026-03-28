@@ -19,7 +19,7 @@ abstract contract VerifierSpec {
     error InvalidSignatureLength();  // 签名长度无效（必须 65 字节）
     error InvalidSignatureV();       // 签名 v 值无效
     error InvalidSignature();        // ecrecover 返回零地址
-    error SignatureSMalleability();  // 签名 s 值过高（EIP-2 防可塑性）
+    error SignatureMalleability();  // 签名 s 值过高（EIP-2 防可塑性）
 
     // ============ 元数据（子合约必须覆盖） ============
 
@@ -84,7 +84,7 @@ abstract contract VerifierSpec {
         // 拒绝高 s 值以防止签名可塑性（EIP-2）
         // secp256k1 曲线阶的一半 = 0x7FFFFFFF...681B20A0
         if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) {
-            revert SignatureSMalleability();
+            revert SignatureMalleability();
         }
 
         address signer = ecrecover(digest, v, r, s);
