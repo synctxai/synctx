@@ -11,9 +11,12 @@ interface IVerifier {
     /// @param dealContract 交易合约地址
     /// @param dealIndex 交易索引
     /// @param verificationIndex 验证槽位索引
-    /// @param result 验证结果：正数=通过，负数=失败，0=不确定
+    /// @param result 验证结果：正数=通过，负数=失败，0=不确定。
+    ///        正数的含义取决于 Spec 声明的结果类型：
+    ///        - 是否判断（Boolean）：仅用 1（是）/ -1（否），不允许其他值
+    ///        - 打分（Score）：在 [1, maxScore] 区间内返回分数，maxScore 由 Spec 的 description() 声明（≤ 127）
     /// @param reason 人类可读的原因描述
-    /// @param expectedFee 预期 USDC 费用；如果 DealContract 未支付此金额则 revert
+    /// @param expectedFee 预期 USDC 费用，必须与请求签名时返回给 Trader 的 fee 一致；如果 DealContract 未支付此金额则 revert
     function reportResult(address dealContract, uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason, uint256 expectedFee) external;
 
     /// @notice Verifier 实例名称（用于展示）
@@ -25,7 +28,7 @@ interface IVerifier {
     /// @notice 合约 owner（签名和提交结果的 EOA）
     function owner() external view returns (address);
 
-    /// @notice 返回此 Verifier 实现的业务 Spec 合约地址
+    /// @notice 返回此 Verifier 实现的业务 Spec 合约地址（VerifierSpec 子合约）
     function spec() external view returns (address);
 
     /// @notice EIP-712 域分隔符（public，供 Spec 的 check() 读取）

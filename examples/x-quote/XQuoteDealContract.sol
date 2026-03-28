@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import "./DealBase.sol";
 import "./IVerifier.sol";
-import "./IVerifierSpec.sol";
 import "./XQuoteVerifierSpec.sol";
 import "./IERC20.sol";
 
