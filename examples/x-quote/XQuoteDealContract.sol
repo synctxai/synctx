@@ -752,7 +752,10 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             "> 1. `requestVerification(dealIndex, 0)`\n"
             "> 2. **Must** call `notify_verifier(verifier_address, dealContract, dealIndex, verificationIndex)` to notify the verifier\n"
             "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
-            "> **Settlement semantics (code 8/9)**: In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B.\n";
+            "> **Settlement semantics (code 8/9)**: In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B.\n\n"
+            "## Gasless Transactions\n\n"
+            "If `trustedForwarder()` returns a non-zero address, all write operations can be executed gaslessly via the relayer. "
+            "Use `synctx relay` instead of direct contract calls — the CLI handles EIP-712 signing and submission automatically.\n";
     }
 
     // ===================== 状态查询 =====================
