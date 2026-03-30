@@ -31,6 +31,9 @@ Commands:
   sign-typed-data      EIP-712 typed data signing
   decode-logs          Parse transaction event logs
   decode-revert        Decode revert error data
+  relay                Gasless contract write via meta-tx relayer
+  relay-with-permit    Gasless approve + write via relayer (EIP-2612)
+  relay-check          Check if gasless relay is available
   to-raw               Human amount -> raw integer
   fmt                  Raw integer -> human readable
 """
@@ -146,6 +149,21 @@ def cmd_all_balances(_args):
     from wallet import all_balances
     _out(all_balances())
 
+def cmd_relay(args):
+    from relay import relay
+    parsed_args = json.loads(args.args) if args.args else None
+    _out(relay(args.contract, args.sig, parsed_args, chain_id=args.chain))
+
+def cmd_relay_with_permit(args):
+    from relay import relay_with_permit
+    parsed_args = json.loads(args.args) if args.args else None
+    _out(relay_with_permit(args.token, args.contract, int(args.amount),
+                           args.sig, parsed_args, chain_id=args.chain))
+
+def cmd_relay_check(args):
+    from relay import relay_check
+    _out(relay_check(args.contract, chain_id=args.chain))
+
 def cmd_to_raw(args):
     from wallet import to_raw
     _out(to_raw(args.amount, args.decimals))
@@ -242,6 +260,27 @@ def main():
     # all-balances
     sub.add_parser("all-balances", help="ETH + USDC balances across all chains")
 
+    # relay
+    p = sub.add_parser("relay", help="Gasless contract write via relayer (meta-tx)")
+    p.add_argument("contract", help="Contract address")
+    p.add_argument("sig", help="Function signature")
+    p.add_argument("--args", help="JSON array of arguments", default="[]")
+    p.add_argument("--chain", type=int, default=10)
+
+    # relay-with-permit
+    p = sub.add_parser("relay-with-permit", help="Gasless approve + contract write via relayer")
+    p.add_argument("token", help="ERC20 token address")
+    p.add_argument("contract", help="Contract to invoke")
+    p.add_argument("amount", help="Approve amount in raw units")
+    p.add_argument("sig", help="Function signature to invoke")
+    p.add_argument("--args", help="JSON array of arguments", default="[]")
+    p.add_argument("--chain", type=int, default=10)
+
+    # relay-check
+    p = sub.add_parser("relay-check", help="Check if gasless relay is available for a contract")
+    p.add_argument("contract", help="Contract address")
+    p.add_argument("--chain", type=int, default=10)
+
     # to-raw
     p = sub.add_parser("to-raw", help="Human amount -> raw integer")
     p.add_argument("amount", type=float, help="Human-readable amount")
@@ -265,6 +304,8 @@ def main():
         "check-wallet": cmd_check_wallet, "generate-wallet": cmd_generate_wallet,
         "all-balances": cmd_all_balances,
         "approve": cmd_approve, "approve-and-invoke": cmd_approve_and_invoke,
+        "relay": cmd_relay, "relay-with-permit": cmd_relay_with_permit,
+        "relay-check": cmd_relay_check,
         "sign-message": cmd_sign_message, "sign-typed-data": cmd_sign_typed_data,
         "decode-logs": cmd_decode_logs, "decode-revert": cmd_decode_revert,
         "to-raw": cmd_to_raw, "fmt": cmd_fmt,

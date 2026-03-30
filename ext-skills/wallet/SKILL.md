@@ -109,6 +109,21 @@ uv run scripts/run.py approve 0x...token... 0x...spender... 1000000 --chain 8453
 uv run scripts/run.py approve-and-invoke 0x...token... 0x...contract... 1000000 "createDeal(...)" --args '[...]' --chain 8453
 ```
 
+### Gasless Relay (Meta-Transactions)
+
+```bash
+# Check if relay is available for a contract
+uv run scripts/run.py relay-check 0x...contract... --chain 8453
+
+# Gasless contract write (replaces invoke — user signs, relayer pays gas)
+uv run scripts/run.py relay 0x...contract... "accept(uint256)" --args '["3"]' --chain 8453
+
+# Gasless approve + write (replaces approve-and-invoke — two signatures, zero gas)
+uv run scripts/run.py relay-with-permit 0x...token... 0x...contract... 1000000 "createDeal(...)" --args '[...]' --chain 8453
+```
+
+> **When to use relay vs invoke**: If `relay-check` returns `available: true`, prefer `relay` over `invoke` — the user pays zero gas. If relay is unavailable (no forwarder, relayer down), fall back to `invoke`.
+
 ### Signing
 
 ```bash
