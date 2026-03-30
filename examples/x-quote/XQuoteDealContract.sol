@@ -755,7 +755,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             "> **Settlement semantics (code 8/9)**: In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B.\n\n"
             "## Gasless Transactions\n\n"
             "If `trustedForwarder()` returns a non-zero address, all write operations can be executed gaslessly via the relayer. "
-            "Use `synctx relay` instead of direct contract calls — the CLI handles EIP-712 signing and submission automatically.\n";
+            "Use `relay` instead of `invoke` in the wallet skill -- the CLI handles EIP-712 signing and submission automatically.\n";
     }
 
     // ===================== 状态查询 =====================
