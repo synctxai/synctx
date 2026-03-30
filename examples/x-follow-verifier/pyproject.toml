@@ -1,0 +1,15 @@
+[project]
+name = "x-follow-verifier-example"
+version = "0.1.0"
+description = "SyncTx example off-chain verifier for X follow deals"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.9.0",
+  "httpx>=0.28.0",
+  "eth-account>=0.13.0",
+  "web3>=7.0.0",
+  "pydantic-settings>=2.7.0",
+]
+
+[tool.uv]
+package = false
