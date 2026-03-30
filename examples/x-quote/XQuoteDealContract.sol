@@ -131,21 +131,6 @@ contract XQuoteDealContract is DealBase, Initializable {
     mapping(uint256 => Deal) internal deals;
     mapping(uint256 => Settlement) internal settlements;
 
-    // ===================== 业务事件 =====================
-
-    event DealAccepted(uint256 indexed dealIndex);
-    event DealClaimedDone(uint256 indexed dealIndex);
-    event DealCompleted(uint256 indexed dealIndex, uint256 amount);
-    event Withdrawn(uint256 indexed dealIndex, address indexed recipient, uint96 amount);
-    event VerificationReset(uint256 indexed dealIndex, uint256 verificationIndex, address indexed verifier);
-    event SettlingStarted(uint256 indexed dealIndex);
-    event SettlementProposed(uint256 indexed dealIndex, address indexed proposer, uint96 amountToA);
-    event SettlementConfirmed(uint256 indexed dealIndex);
-    event SettlementTimedOutSeized(uint256 indexed dealIndex, uint96 amountSeized);
-    event ProtocolFeePaid(uint256 indexed dealIndex, uint96 fee);
-    event FundsSeized(uint256 indexed dealIndex, uint96 amount);
-    event DealFeeSplit(uint256 indexed dealIndex, uint96 grossAmount, uint96 fee, uint96 netAmount);
-
     // ===================== 修饰器 =====================
 
     modifier onlyA(uint256 dealIndex) {
@@ -262,10 +247,7 @@ contract XQuoteDealContract is DealBase, Initializable {
         d.status = WAITING_CLAIM;
         d.stageTimestamp = uint48(block.timestamp);
 
-        emit ProtocolFeePaid(dealIndex, fee);
-        emit DealFeeSplit(dealIndex, d.amount + fee, fee, d.amount);
         _emitPhaseChanged(dealIndex, 2); // → Active
-        emit DealAccepted(dealIndex);
         _emitStateChanged(dealIndex, WAITING_CLAIM);
 
         if (!IERC20(feeToken).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
@@ -285,7 +267,6 @@ contract XQuoteDealContract is DealBase, Initializable {
         d.status = WAITING_CONFIRM;
         d.stageTimestamp = uint48(block.timestamp);
 
-        emit DealClaimedDone(dealIndex);
         _emitStateChanged(dealIndex, WAITING_CONFIRM);
     }
 
@@ -300,7 +281,6 @@ contract XQuoteDealContract is DealBase, Initializable {
         d.amount = 0;
         d.status = COMPLETED;
 
-        emit DealCompleted(dealIndex, amt);
         _emitStateChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
 
@@ -391,7 +371,6 @@ contract XQuoteDealContract is DealBase, Initializable {
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
         if (result > 0) {
-            emit DealCompleted(dealIndex, transferToB);
             _emitStateChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
         } else if (result < 0) {
@@ -400,7 +379,6 @@ contract XQuoteDealContract is DealBase, Initializable {
             _emitPhaseChanged(dealIndex, 4); // → Failed
         } else {
             _emitStateChanged(dealIndex, SETTLING);
-            emit SettlingStarted(dealIndex);
         }
 
         // --- 交互：所有转账最后执行 ---
@@ -433,8 +411,6 @@ contract XQuoteDealContract is DealBase, Initializable {
         d.status = SETTLING;
         d.stageTimestamp = uint48(block.timestamp);
 
-        emit VerificationReset(dealIndex, verificationIndex, d.verifier);
-        emit SettlingStarted(dealIndex);
         _emitStateChanged(dealIndex, SETTLING);
 
         if (vFee > 0) {
@@ -459,7 +435,6 @@ contract XQuoteDealContract is DealBase, Initializable {
             amountToA: amountToA
         });
 
-        emit SettlementProposed(dealIndex, msg.sender, amountToA);
     }
 
     /// @notice 确认对方的协商提案
@@ -481,7 +456,6 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         delete settlements[dealIndex];
 
-        emit SettlementConfirmed(dealIndex);
         _emitStateChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
 
@@ -507,10 +481,6 @@ contract XQuoteDealContract is DealBase, Initializable {
         d.status = FORFEITED;
         delete settlements[dealIndex];
 
-        if (seized > 0) {
-            emit FundsSeized(dealIndex, seized);
-        }
-        emit SettlementTimedOutSeized(dealIndex, seized);
         _emitStateChanged(dealIndex, FORFEITED);
         _emitPhaseChanged(dealIndex, 4); // → Failed
 
@@ -545,7 +515,6 @@ contract XQuoteDealContract is DealBase, Initializable {
             uint96 amt = d.amount;
             d.amount = 0;
             d.status = COMPLETED;
-            emit DealCompleted(dealIndex, amt);
             _emitStateChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
             if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
@@ -564,8 +533,6 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         uint96 amt = d.amount;
         d.amount = 0;
-
-        emit Withdrawn(dealIndex, msg.sender, amt);
 
         if (!IERC20(feeToken).transfer(msg.sender, amt)) revert TransferFailed();
     }
