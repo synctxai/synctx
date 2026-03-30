@@ -6,6 +6,7 @@ import "./IVerifier.sol";
 import "./XQuoteVerifierSpec.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
+import "./ERC2771Mixin.sol";
 
 
 /// @title XQuoteDealContract - X 引用推文交易合约
@@ -19,7 +20,7 @@ import "./Initializable.sol";
 ///      3. B 在 X 上引用推文，然后调用 claimDone 提交 quote_tweet_id
 ///      4. A 手动确认付款，或请求 Verifier 自动验证
 ///      5. 如果验证不确定或 Verifier 超时，进入协商阶段
-contract XQuoteDealContract is DealBase, Initializable {
+contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 错误 =====================
 
@@ -134,12 +135,12 @@ contract XQuoteDealContract is DealBase, Initializable {
     // ===================== 修饰器 =====================
 
     modifier onlyA(uint256 dealIndex) {
-        if (msg.sender != deals[dealIndex].partyA) revert NotPartyA();
+        if (_msgSender() != deals[dealIndex].partyA) revert NotPartyA();
         _;
     }
 
     modifier onlyB(uint256 dealIndex) {
-        if (msg.sender != deals[dealIndex].partyB) revert NotPartyB();
+        if (_msgSender() != deals[dealIndex].partyB) revert NotPartyB();
         _;
     }
 
@@ -186,13 +187,14 @@ contract XQuoteDealContract is DealBase, Initializable {
         string calldata quoter_username
     ) external returns (uint256 dealIndex) {
         // --- 参数校验 ---
+        address sender = _msgSender();
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
         if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
         if (partyB == address(0)) revert InvalidParams();
-        if (msg.sender == partyB) revert InvalidParams();
+        if (sender == partyB) revert InvalidParams();
 
         if (verifier == address(0)) revert InvalidParams();
-        if (msg.sender == verifier || partyB == verifier) revert InvalidParams();
+        if (sender == verifier || partyB == verifier) revert InvalidParams();
         if (verifier.code.length == 0) revert VerifierNotContract();
         if (sig.length == 0) revert InvalidVerifierSignature();
         if (deadline < block.timestamp) revert SignatureExpired();
@@ -203,12 +205,12 @@ contract XQuoteDealContract is DealBase, Initializable {
         _verifyVerifierSignature(verifier, tweet_id, canonicalUsername, verifierFee, deadline, sig);
 
         // --- USDC 转入托管 ---
-        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(sender, address(this), grossAmount)) revert TransferFailed();
 
         // --- 创建交易记录 ---
         {
             address[] memory traders = new address[](2);
-            traders[0] = msg.sender;
+            traders[0] = sender;
             traders[1] = partyB;
             address[] memory verifiers = new address[](1);
             verifiers[0] = verifier;
@@ -217,7 +219,7 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         {
             Deal storage d = deals[dealIndex];
-            d.partyA = msg.sender;
+            d.partyA = sender;
             d.partyB = partyB;
             d.verifier = verifier;
             d.amount = grossAmount - PROTOCOL_FEE;
@@ -320,23 +322,24 @@ contract XQuoteDealContract is DealBase, Initializable {
         onlySlot0(verificationIndex)
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        address sender = _msgSender();
+        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
         uint96 fee = d.verifierFee;
         address verifier = d.verifier;
 
-        if (IERC20(feeToken).allowance(msg.sender, address(this)) < fee) revert InsufficientAllowance();
-        if (IERC20(feeToken).balanceOf(msg.sender) < fee) revert InsufficientBalance();
+        if (IERC20(feeToken).allowance(sender, address(this)) < fee) revert InsufficientAllowance();
+        if (IERC20(feeToken).balanceOf(sender) < fee) revert InsufficientBalance();
 
         // CEI：先改状态
         d.status = VERIFYING;
-        d.isRequesterA = (msg.sender == d.partyA);
+        d.isRequesterA = (sender == d.partyA);
         d.verificationTimestamp = uint48(block.timestamp);
 
         emit VerificationRequested(dealIndex, verificationIndex, verifier);
 
-        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(sender, address(this), fee)) revert TransferFailed();
     }
 
     /// @notice Verifier 提交验证结果
@@ -399,7 +402,8 @@ contract XQuoteDealContract is DealBase, Initializable {
         onlySlot0(verificationIndex)
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        address sender = _msgSender();
+        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (block.timestamp <= uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT)
             revert VerificationNotTimedOut();
 
@@ -426,12 +430,13 @@ contract XQuoteDealContract is DealBase, Initializable {
         atStatus(dealIndex, SETTLING)
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        address sender = _msgSender();
+        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
         if (amountToA > d.amount) revert InvalidSettlement();
 
         settlements[dealIndex] = Settlement({
-            proposer: msg.sender,
+            proposer: sender,
             amountToA: amountToA
         });
 
@@ -444,9 +449,10 @@ contract XQuoteDealContract is DealBase, Initializable {
     {
         Deal storage d = deals[dealIndex];
         Settlement storage stl = settlements[dealIndex];
+        address sender = _msgSender();
 
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
-        if (msg.sender == stl.proposer) revert ProposerCannotConfirm();
+        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (sender == stl.proposer) revert ProposerCannotConfirm();
         if (stl.proposer == address(0)) revert InvalidSettlement();
 
         uint96 toA = stl.amountToA;
@@ -473,7 +479,8 @@ contract XQuoteDealContract is DealBase, Initializable {
         atStatus(dealIndex, SETTLING)
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        address sender = _msgSender();
+        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (block.timestamp <= uint256(d.stageTimestamp) + SETTLING_TIMEOUT) revert SettlementNotTimedOut();
 
         uint96 seized = d.amount;
@@ -502,7 +509,7 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         if (s == WAITING_CLAIM) {
             // B 未 claimDone → B 违约
-            if (msg.sender != d.partyA) revert NotPartyA();
+            if (_msgSender() != d.partyA) revert NotPartyA();
             d.status = VIOLATED;
             d.violator = d.partyB;
             _emitViolated(dealIndex, d.partyB);
@@ -511,7 +518,7 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         } else if (s == WAITING_CONFIRM) {
             // A 未确认 → 自动付款给 B
-            if (msg.sender != d.partyB) revert NotPartyB();
+            if (_msgSender() != d.partyB) revert NotPartyB();
             uint96 amt = d.amount;
             d.amount = 0;
             d.status = COMPLETED;
@@ -527,14 +534,15 @@ contract XQuoteDealContract is DealBase, Initializable {
     /// @notice 违约后提取资金
     function withdraw(uint256 dealIndex) external atStatus(dealIndex, VIOLATED) {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
-        if (msg.sender == d.violator) revert ViolatorCannot();
+        address sender = _msgSender();
+        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (sender == d.violator) revert ViolatorCannot();
         if (d.amount == 0) revert NoFunds();
 
         uint96 amt = d.amount;
         d.amount = 0;
 
-        if (!IERC20(feeToken).transfer(msg.sender, amt)) revert TransferFailed();
+        if (!IERC20(feeToken).transfer(sender, amt)) revert TransferFailed();
     }
 
     // ===================== 内部辅助函数 =====================
