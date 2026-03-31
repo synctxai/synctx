@@ -16,7 +16,9 @@ XFollowDealContract is a concrete DealContract implementation for the **"A pays 
 - **Identity:** `TwitterRegistry` binding is mandatory — contract reads `usernameOf[msg.sender]` on-chain, reverts if unbound
 - **Verification semantics:** Verifier checks whether the follow relationship exists at verification time. Identity is guaranteed by TwitterRegistry (wallet ↔ username)
 - **Off-chain verification:** Dual-provider parallel check via twitterapi.io + twitter-api45
-- **End conditions:** Budget exhausted OR deadline reached — A cannot close early
+- **Lifecycle:** TESTING → OPEN → CLOSED. No PAUSED state
+- **TESTING:** A can modify params (reward, fee, deadline, target, verifier), add/remove budget. Call `activate()` to go live
+- **OPEN → CLOSED:** Budget exhausted (with no pending claims), deadline reached, or A calls `withdrawRemaining()`
 - **Deadline constraint:** `sigDeadline >= campaignDeadline`
 - **Protocol fee:** Per-claim, deducted from budget (not at creation)
 - **Failure limit:** `MAX_FAILURES = 3` — B banned from this contract after 3 failed claims
@@ -37,18 +39,18 @@ address public immutable TWITTER_REGISTRY;
 
 // ===================== Campaign State =====================
 
-address public partyA;               // campaign creator
+address public partyA;               // campaign creator (set at createDeal, immutable after)
+uint8   public campaignStatus;       // TESTING(0) / OPEN(1) / CLOSED(2)
 address public verifier;             // verifier contract address
-uint96  public rewardPerFollow;      // fixed USDC reward per follow
-uint96  public verifierFee;          // fee per verification (from budget)
-uint48  public deadline;             // campaign end time (Unix seconds)
+uint96  public rewardPerFollow;      // fixed USDC reward per follow (mutable in TESTING)
+uint96  public verifierFee;          // fee per verification (mutable in TESTING)
+uint48  public deadline;             // campaign end time (mutable in TESTING)
 uint96  public budget;               // remaining unlocked USDC budget
 uint32  public pendingClaims;        // claims awaiting verification
 uint32  public completedClaims;      // successfully verified claims
 uint256 public signatureDeadline;    // verifier signature expiry (must be >= deadline)
-string  public target_username;      // canonicalized: no @, lowercase
-bytes   public verifierSignature;    // EIP-712 signature
-bool    public closed;               // true after A withdraws remaining
+string  public target_username;      // canonicalized (mutable in TESTING)
+bytes   public verifierSignature;    // EIP-712 signature (re-signable in TESTING)
 ```
 
 ### 2.2 Per-Claim Storage (each claim = a dealIndex)
@@ -70,12 +72,16 @@ mapping(address => uint8) public failCount;    // failed attempts; >= MAX_FAILUR
 
 ## 3. Function Reference
 
-### 3.1 Campaign Setup
+### 3.1 Campaign Setup & Lifecycle
 
 | Method | Parameters | Caller | Description |
 |--------|------------|--------|-------------|
 | `constructor(...)` | `address feeCollector, uint96 protocolFee, address requiredSpec, address twitterRegistry` | Deploy | Set immutables |
-| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A (once) | Initialize campaign. `grossAmount` deposited entirely as budget. Requires `sigDeadline >= deadline` and `budget >= claimCost()`. Can only be called once |
+| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A (once) | Initialize campaign in TESTING status. `grossAmount` deposited as budget. Can only be called once |
+| `updateParams(...)` | `uint96 rewardPerFollow, uint96 verifierFee, uint48 deadline, string target_username` | A | Modify campaign params. Only in TESTING. Requires new verifier signature if params change |
+| `addBudget(uint96 amount)` | `uint96 amount` | A | Add USDC to budget. Only in TESTING |
+| `removeBudget(uint96 amount)` | `uint96 amount` | A | Withdraw USDC from budget. Only in TESTING |
+| `activate()` | — | A | TESTING → OPEN. Locks params. Requires `budget >= claimCost()` and `sigDeadline >= deadline` |
 
 ### 3.2 Claim Operations (each claim = a dealIndex)
 
@@ -89,15 +95,15 @@ mapping(address => uint8) public failCount;    // failed attempts; >= MAX_FAILUR
 
 | Method | Parameters | Caller | Description |
 |--------|------------|--------|-------------|
-| `withdrawRemaining()` | — | A | After deadline + pendingClaims==0, A withdraws remaining budget. Sets closed=true |
+| `withdrawRemaining()` | — | A | Only when CLOSED + pendingClaims==0. Transfers remaining budget to A |
 
 ### 3.4 Query Functions
 
 | Method | Return | Description |
 |--------|--------|-------------|
 | `claimCost()` | `uint96` | `rewardPerFollow + verifierFee + PROTOCOL_FEE` |
-| `campaignStatus()` | `uint8` | OPEN / EXHAUSTED / EXPIRED / CLOSED |
-| `dealStatus(dealIndex)` | `uint8` | Per-claim status: VERIFYING / COMPLETED / REJECTED / TIMED_OUT / NOT_FOUND |
+| `campaignStatus()` | `uint8` | TESTING(0) / OPEN(1) / CLOSED(2) — stored, not derived |
+| `dealStatus(dealIndex)` | `uint8` | Per-claim status (see Section 6.2) |
 | `canClaim(addr)` | `bool` | Whether addr can claim now |
 | `failures(addr)` | `uint8` | Failed claim count for addr |
 | `remainingSlots()` | `uint256` | `budget / claimCost()` |
@@ -190,10 +196,15 @@ sequenceDiagram
     Note over A: Deploy XFollowDealContract(feeCollector, protocolFee, spec, registry)
     Note over A: 🟢 USDC.approve(contract, grossAmount)
     A->>C: 🟢 createDeal(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
-    Note over C: grossAmount → budget<br/>Campaign is now OPEN
+    Note over C: grossAmount → budget<br/>Campaign status: TESTING
+
+    Note over A: (Optional: adjust params, add/remove budget in TESTING)
+
+    A->>C: 🟢 activate()
+    Note over C: Campaign status: OPEN (params locked)
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
-    Note over B,C: Claim Phase (each claim = a dealIndex)
+    Note over B,C: Claim Phase (each claim = a dealIndex, only when OPEN)
 
     Note over B: 1. Bind Twitter via TwitterRegistry
     Note over B: 2. Follow target_username on X
@@ -219,7 +230,7 @@ sequenceDiagram
     Note over A,C: Withdrawal Phase (after deadline)
 
     A->>C: 🟢 withdrawRemaining()
-    Note over C: Remaining budget → A<br/>closed = true
+    Note over C: Remaining budget → A
 ```
 
 ---
@@ -228,14 +239,24 @@ sequenceDiagram
 
 ### 6.1 Campaign Status (`campaignStatus()`)
 
-| Code | Status | Meaning |
-|------|--------|---------|
-| 0 | OPEN | Accepting claims (budget ≥ claimCost, not past deadline) |
-| 1 | EXHAUSTED | Budget < claimCost (may recover if claims are rejected) |
-| 2 | EXPIRED | Past deadline, pending claims may still resolve |
-| 3 | CLOSED | A has withdrawn remaining budget |
+| Code | Status | Stored | Meaning |
+|------|--------|--------|---------|
+| 0 | TESTING | Yes | A can modify params, add/remove budget. Not yet live |
+| 1 | OPEN | Yes | Live, accepting claims. Params locked |
+| 2 | CLOSED | Yes | No new claims. Pending verifications continue to resolve |
 
-> EXHAUSTED and EXPIRED are derived at runtime. Stored flag is only `closed`.
+All three are stored values, not derived. Transitions:
+
+```
+TESTING → OPEN   (A calls activate())
+OPEN → CLOSED    (auto-triggered when any condition met):
+  - block.timestamp > deadline
+  - budget < claimCost AND pendingClaims == 0
+  - claim()/onVerificationResult()/resetVerification() check and set CLOSED as side-effect
+```
+
+> There is no PAUSED state. TESTING serves as the pre-launch configuration phase.
+> There is no EXHAUSTED/EXPIRED state. These conditions directly trigger CLOSED.
 
 ### 6.2 Per-Claim `dealStatus(dealIndex)`
 
@@ -295,16 +316,17 @@ function phase(uint256 dealIndex) external view override returns (uint8) {
 ```mermaid
 flowchart TD
     subgraph "Campaign Lifecycle"
-        OPEN["OPEN<br/>Accepting claims"]
-        EXHAUSTED["EXHAUSTED<br/>Budget < claimCost<br/>(may recover)"]
-        EXPIRED["EXPIRED<br/>Past deadline"]
-        CLOSED["CLOSED ✅<br/>A withdrew"]
+        TESTING["0 TESTING<br/>A configures params"]
+        OPEN["1 OPEN<br/>Accepting claims"]
+        CLOSED["2 CLOSED<br/>No new claims<br/>pending resolve"]
 
-        OPEN -->|"budget < claimCost"| EXHAUSTED
-        OPEN -->|"past deadline"| EXPIRED
-        EXHAUSTED -->|"claim rejected<br/>budget recovered"| OPEN
-        EXHAUSTED -->|"past deadline"| EXPIRED
-        EXPIRED -->|"withdrawRemaining()<br/>(pendingClaims == 0)"| CLOSED
+        TESTING -->|"A: activate()"| OPEN
+        OPEN -->|"past deadline"| CLOSED
+        OPEN -->|"budget < claimCost<br/>AND pendingClaims == 0"| CLOSED
+    end
+
+    subgraph "Post-CLOSED"
+        CLOSED -->|"pendingClaims == 0<br/>A: withdrawRemaining()"| DONE["Budget → A"]
     end
 
     subgraph "Per-Claim (dealIndex) Lifecycle"
@@ -326,6 +348,7 @@ flowchart TD
 
 | Action | Events Emitted |
 |--------|---------------|
+| `activate()` | `CampaignActivated()` |
 | `claim()` | `DealCreated(dealIndex, [B], [verifier])` → `DealStateChanged(dealIndex, 0)` → `DealPhaseChanged(dealIndex, 2)` → `VerificationRequested(dealIndex, 0, verifier)` |
 | `onVerificationResult(result > 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 2)` → `DealPhaseChanged(dealIndex, 3)` |
 | `onVerificationResult(result < 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 3)` → `DealPhaseChanged(dealIndex, 4)` |
@@ -335,12 +358,12 @@ flowchart TD
 ### 6.6 B's Claim Eligibility
 
 ```
+campaignStatus != OPEN   → CampaignNotOpen (TESTING or CLOSED)
 claimed[B] == true       → AlreadyClaimed (got paid, done)
 failCount[B] >= 3        → MaxFailures (banned from this contract)
 no TwitterRegistry bind  → NotVerified
-budget < claimCost       → BudgetExhausted
-past deadline            → CampaignExpired
-has pending claim        → already in VERIFYING (only one at a time)
+budget < claimCost       → triggers CLOSED (auto-transition)
+has pending claim        → PendingClaim (only one at a time)
 otherwise                → eligible
 ```
 
@@ -367,19 +390,24 @@ sequenceDiagram
     Note over C: claimCost → budget<br/>pendingClaims--<br/>claim → TIMED_OUT
 ```
 
-### 7.3 Campaign Expires with Remaining Budget
+### 7.3 Campaign Auto-Closes (deadline or budget exhausted)
 
 ```mermaid
 sequenceDiagram
-    participant A as A
+    participant B as B
     participant C as Contract
 
-    Note over A,C: Past deadline, pendingClaims == 0
-    A->>C: 🟢 withdrawRemaining()
-    Note over C: budget → A, closed = true
+    alt Past deadline
+        B->>C: 🟢 claim()
+        Note over C: block.timestamp > deadline<br/>campaignStatus → CLOSED<br/>revert CampaignNotOpen
+    else Budget exhausted (no pending)
+        Note over C: After onVerificationResult or resetVerification:<br/>budget < claimCost AND pendingClaims == 0<br/>campaignStatus → CLOSED (auto)
+    end
 ```
 
-### 7.4 Campaign Expires with Pending Claims
+> CLOSED is triggered as a side-effect of `claim()`, `onVerificationResult()`, or `resetVerification()` when termination conditions are met.
+
+### 7.4 Withdrawal After CLOSED
 
 ```mermaid
 sequenceDiagram
@@ -387,23 +415,31 @@ sequenceDiagram
     participant V as Verifier
     participant C as Contract
 
-    Note over A,C: Past deadline, pendingClaims > 0
+    Note over A,C: Campaign is CLOSED
 
-    alt Verifier responds
-        V->>C: 🟢 reportResult(...)
-    else Verifier times out
-        A->>C: 🟢 resetVerification(dealIndex, 0)
+    alt pendingClaims > 0
+        Note over A: Wait for pending claims to resolve
+        alt Verifier responds
+            V->>C: 🟢 reportResult(...)
+        else Verifier times out
+            A->>C: 🟢 resetVerification(dealIndex, 0)
+        end
     end
 
-    Note over A: Once pendingClaims == 0:
+    Note over A: pendingClaims == 0:
     A->>C: 🟢 withdrawRemaining()
+    Note over C: budget → A
 ```
 
-### 7.5 Budget Recovery on Rejection
+### 7.5 Budget Recovery on Rejection (while OPEN)
+
+When a claim is rejected while campaign is still OPEN, `rewardPerFollow` returns to the budget. The campaign remains OPEN as long as budget ≥ claimCost:
 
 ```
-EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget ≥ claimCost)
+claim rejected → budget += rewardPerFollow → OPEN continues (if budget ≥ claimCost)
 ```
+
+If after rejection budget < claimCost AND pendingClaims == 0, campaign auto-closes.
 
 ### 7.6 Design Principles
 
@@ -411,7 +447,9 @@ EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget �
 |-----------|----------------|
 | Contract = campaign | One contract instance per campaign, no deal mapping |
 | Claim = dealIndex | Each B's claim gets a unique dealIndex from `_recordStart` |
-| No early close | A cannot withdraw before deadline |
+| Three states only | TESTING → OPEN → CLOSED. No PAUSED, no EXHAUSTED/EXPIRED as separate states |
+| Auto-close | Campaign auto-transitions to CLOSED on deadline or budget exhaustion |
+| TESTING phase | A can modify all params before going live. `activate()` locks them |
 | A pays all fees | verifierFee + protocolFee from budget per claim |
 | Per-claim protocol fee | PROTOCOL_FEE charged from budget each claim |
 | B provides nothing | `claim()` takes no args — username from TwitterRegistry |
@@ -461,28 +499,39 @@ After deadline + pendingClaims == 0:
 | # | Check | Error |
 |---|-------|-------|
 | 1 | Not already initialized (called once) | AlreadyInitialized |
-| 2 | `grossAmount >= claimCost` (at least 1 claim) | InvalidParams |
-| 3 | `rewardPerFollow > 0` | InvalidParams |
-| 4 | `deadline > block.timestamp` | InvalidParams |
-| 5 | `verifier != address(0)`, is contract | VerifierNotContract |
-| 6 | `target_username` non-empty after canonicalization | InvalidParams |
-| 7 | `sigDeadline >= deadline` | SignatureExpired |
-| 8 | Verifier spec match + EIP-712 signature valid | InvalidVerifierSignature |
-| 9 | `USDC.transferFrom(A, contract, grossAmount)` | TransferFailed |
+| 2 | `rewardPerFollow > 0` | InvalidParams |
+| 3 | `deadline > block.timestamp` | InvalidParams |
+| 4 | `verifier != address(0)`, is contract | VerifierNotContract |
+| 5 | `target_username` non-empty after canonicalization | InvalidParams |
+| 6 | `sigDeadline >= deadline` | SignatureExpired |
+| 7 | Verifier spec match + EIP-712 signature valid | InvalidVerifierSignature |
+| 8 | `USDC.transferFrom(A, contract, grossAmount)` | TransferFailed |
+| 9 | Set campaignStatus = TESTING | — |
 
-### 9.2 claim
+### 9.2 activate
 
 | # | Check | Error |
 |---|-------|-------|
-| 1 | Campaign not closed, not past deadline | CampaignExpired |
-| 2 | `budget >= claimCost` | BudgetExhausted |
-| 3 | `!claimed[msg.sender]` | AlreadyClaimed |
-| 4 | `failCount[msg.sender] < MAX_FAILURES` | MaxFailures |
-| 5 | `TwitterRegistry.usernameOf[msg.sender]` non-empty | NotVerified |
-| 6 | No pending claim for msg.sender | PendingClaim |
-| 7 | Lock claimCost from budget, pendingClaims++ | — |
+| 1 | `msg.sender == partyA` | NotPartyA |
+| 2 | `campaignStatus == TESTING` | InvalidStatus |
+| 3 | `budget >= claimCost` (at least 1 claim) | InvalidParams |
+| 4 | `sigDeadline >= deadline` | SignatureExpired |
+| 5 | Set campaignStatus = OPEN | — |
 
-### 9.3 onVerificationResult
+### 9.3 claim
+
+| # | Check | Error |
+|---|-------|-------|
+| 1 | `campaignStatus == OPEN` | CampaignNotOpen |
+| 2 | `block.timestamp <= deadline` (else auto-close → CLOSED) | — |
+| 3 | `budget >= claimCost` (else auto-close → CLOSED) | — |
+| 4 | `!claimed[msg.sender]` | AlreadyClaimed |
+| 5 | `failCount[msg.sender] < MAX_FAILURES` | MaxFailures |
+| 6 | `TwitterRegistry.usernameOf[msg.sender]` non-empty | NotVerified |
+| 7 | No pending claim for msg.sender | PendingClaim |
+| 8 | Lock claimCost from budget, pendingClaims++ | — |
+
+### 9.4 onVerificationResult
 
 | # | Check | Error |
 |---|-------|-------|
@@ -490,12 +539,11 @@ After deadline + pendingClaims == 0:
 | 2 | Claim status is VERIFYING | InvalidStatus |
 | 3 | Distribute funds, update counters | — |
 
-### 9.4 withdrawRemaining
+### 9.5 withdrawRemaining
 
 | # | Check | Error |
 |---|-------|-------|
 | 1 | `msg.sender == partyA` | NotPartyA |
-| 2 | `block.timestamp > deadline` | NotExpired |
+| 2 | `campaignStatus == CLOSED` | NotClosed |
 | 3 | `pendingClaims == 0` | PendingClaims |
 | 4 | `budget > 0` | NoFunds |
-| 5 | `!closed` | AlreadyClosed |
