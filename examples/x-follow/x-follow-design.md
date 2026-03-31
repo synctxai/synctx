@@ -207,7 +207,8 @@ Verifier receives notify_verify (dealIndex = claim, verificationIndex = 0)
   ├── 1. Read verificationParams(dealIndex, 0) → decode specParams
   ├── 2. Dual-provider follow check (twitterapi.io + twitter-api45)
   ├── 3. Merge: ANY follow → 1, not following → retry → -1 or 1, both error → 0
-  └── 4. reportResult(campaign, dealIndex, 0, result, reason, expectedFee)
+  ├── 4. Re-read dealStatus(dealIndex) — still must be VERIFYING (0)
+  └── 5. reportResult(campaign, dealIndex, 0, result, reason, expectedFee)
 ```
 
 ---
@@ -292,7 +293,7 @@ sequenceDiagram
 | Code | Status | Stored/Derived | Meaning |
 |------|--------|---------------|---------|
 | 0 | VERIFYING | Stored | Awaiting verifier |
-| 1 | VERIFIER_TIMED_OUT | Derived | Past VERIFICATION_TIMEOUT, eligible for resetVerification |
+| 1 | VERIFIER_TIMED_OUT | Derived | Past VERIFICATION_TIMEOUT. `reportResult()` is no longer accepted; use `resetVerification()` |
 | 2 | COMPLETED | Stored | B paid |
 | 3 | REJECTED | Stored | Not following or inconclusive, reward returned |
 | 4 | TIMED_OUT | Stored | After resetVerification, claimCost returned |

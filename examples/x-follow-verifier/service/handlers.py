@@ -147,17 +147,20 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
             resp["tag"] = tag
         await client.send_message(sender, resp)
 
+    async def _reply_not_verifying(status: int) -> None:
+        logger.warning("Deal %s is not in VERIFYING state (status=%d), ignoring notification", deal_index, status)
+        await _reply({
+            "action": "result",
+            "dealIndex": deal_index,
+            "verificationIndex": verification_index,
+            "error": f"Deal is not in VERIFYING state (current status={status})",
+        })
+
     try:
         # 0. Check on-chain dealStatus — only proceed if VERIFYING
         status = read_deal_status(deal_contract, int(deal_index))
         if status != VERIFYING_STATUS:
-            logger.warning("Deal %s is not in VERIFYING state (status=%d), ignoring notification", deal_index, status)
-            await _reply({
-                "action": "result",
-                "dealIndex": deal_index,
-                "verificationIndex": verification_index,
-                "error": f"Deal is not in VERIFYING state (current status={status})",
-            })
+            await _reply_not_verifying(status)
             return
 
         # 1. Read authoritative verification params from on-chain
@@ -180,6 +183,12 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
         # 2. Off-chain verification — dual-provider follow check
         result_code, reason = await _check_follow_with_result(follower, target)
         logger.info("Follow verification result: dealIndex=%s, result=%d, reason=%s", deal_index, result_code, reason)
+
+        # Re-check status before reportResult so near-timeout claims do not waste a tx.
+        status = read_deal_status(deal_contract, int(deal_index))
+        if status != VERIFYING_STATUS:
+            await _reply_not_verifying(status)
+            return
 
         # 3. On-chain reportResult
         tx_hash = report_result(

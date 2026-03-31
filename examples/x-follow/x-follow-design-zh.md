@@ -207,7 +207,8 @@ Verifier 收到 notify_verify（dealIndex = claim，verificationIndex = 0）
   ├── 1. 读取 verificationParams(dealIndex, 0) → 解码 specParams
   ├── 2. 双源关注检查（twitterapi.io + twitter-api45）
   ├── 3. 合并：任一关注 → 1，未关注 → 重试 → -1 或 1，均出错 → 0
-  └── 4. reportResult(campaign, dealIndex, 0, result, reason, expectedFee)
+  ├── 4. 再次读取 dealStatus(dealIndex) — 仍必须是 VERIFYING(0)
+  └── 5. reportResult(campaign, dealIndex, 0, result, reason, expectedFee)
 ```
 
 ---
@@ -292,7 +293,7 @@ sequenceDiagram
 | 代码 | 状态 | 存储/派生 | 含义 |
 |------|------|---------|------|
 | 0 | VERIFYING | 存储 | 等待 verifier |
-| 1 | VERIFIER_TIMED_OUT | 派生 | 超过 VERIFICATION_TIMEOUT，可调用 resetVerification |
+| 1 | VERIFIER_TIMED_OUT | 派生 | 超过 VERIFICATION_TIMEOUT。`reportResult()` 不再接受，只能调用 `resetVerification()` |
 | 2 | COMPLETED | 存储 | B 已收款 |
 | 3 | REJECTED | 存储 | 未关注或不确定，奖励已退回 |
 | 4 | TIMED_OUT | 存储 | resetVerification 后，claimCost 已退回 |

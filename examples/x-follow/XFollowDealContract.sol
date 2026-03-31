@@ -38,6 +38,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     error PendingClaims();
     error NoFunds();
     error VerificationNotTimedOut();
+    error VerificationTimedOut();
     error InvalidVerificationIndex();
     error InsufficientBudget();
 
@@ -249,6 +250,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (msg.sender != verifier) revert NotVerifier();
         Claim storage c = claims[dealIndex];
         if (c.status != VERIFYING) revert InvalidStatus();
+        if (_isVerificationTimedOut(c)) revert VerificationTimedOut();
 
         uint96 reward = rewardPerFollow;
         uint96 vFee = verifierFee;
@@ -310,7 +312,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     {
         Claim storage c = claims[dealIndex];
         if (c.status != VERIFYING) revert InvalidStatus();
-        if (block.timestamp <= uint256(c.timestamp) + VERIFICATION_TIMEOUT) revert VerificationNotTimedOut();
+        if (!_isVerificationTimedOut(c)) revert VerificationNotTimedOut();
 
         c.status = TIMED_OUT;
         pendingClaims--;
@@ -354,6 +356,10 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     function _hasPendingClaim(address addr) internal view returns (bool) {
         uint256 idx = pendingClaimIndex[addr];
         return claims[idx].claimer == addr && claims[idx].status == VERIFYING;
+    }
+
+    function _isVerificationTimedOut(Claim storage c) internal view returns (bool) {
+        return block.timestamp > uint256(c.timestamp) + VERIFICATION_TIMEOUT;
     }
 
     function _verifyVerifierSignature(
@@ -490,7 +496,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (c.claimer == address(0)) return NOT_FOUND;
 
         if (c.status == VERIFYING) {
-            if (block.timestamp > uint256(c.timestamp) + VERIFICATION_TIMEOUT) {
+            if (_isVerificationTimedOut(c)) {
                 return VERIFIER_TIMED_OUT;
             }
             return VERIFYING;
