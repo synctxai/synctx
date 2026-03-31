@@ -10,7 +10,7 @@ from typing import Any
 
 from config import SIGN_DEADLINE_SECONDS, settings
 from signer import sign_verify_request
-from chain import report_result, read_verification_params, read_deal_status
+from chain import report_result, read_verification_params, read_deal_status, is_twitter_verified
 from mcp_client import PlatformClient
 from x_follow_spec import decode_spec_params
 from verification import is_following
@@ -98,6 +98,25 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
         logger.error("verify_fee is configured as %d, refusing to sign", fee)
         await _reply({"accepted": False, "reason": "Verifier fee must be > 0"})
         return
+
+    # Pre-check: follower must have verified Twitter identity OR not already following target
+    twitter_verified = False
+    try:
+        twitter_verified = is_twitter_verified(follower_username)
+    except Exception as e:
+        logger.warning("TwitterRegistry check failed, skipping: %s", e)
+
+    if not twitter_verified:
+        # Not verified via TwitterRegistry — check they are not already following
+        try:
+            follow_result = await is_following(follower_username, target_username)
+            if follow_result.error is None and follow_result.following:
+                logger.warning("request_sign rejected: %s already follows %s and has no TwitterRegistry binding",
+                               follower_username, target_username)
+                await _reply({"accepted": False, "reason": f"@{follower_username} already follows @{target_username}. Verify Twitter identity via TwitterRegistry or ensure not already following."})
+                return
+        except Exception as e:
+            logger.warning("Pre-check follow status failed, proceeding: %s", e)
 
     try:
         result = sign_verify_request(

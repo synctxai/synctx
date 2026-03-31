@@ -154,3 +154,33 @@ def read_deal_status(deal_contract_addr: str, deal_index: int) -> int:
     addr = Web3.to_checksum_address(deal_contract_addr)
     deal_obj = w3.eth.contract(address=addr, abi=DEAL_CONTRACT_ABI)
     return deal_obj.functions.dealStatus(deal_index).call()
+
+
+# ---------------------------------------------------------------------------
+# TwitterRegistry — check if a username has a verified on-chain binding
+# ---------------------------------------------------------------------------
+
+TWITTER_REGISTRY_ABI = [
+    {
+        "inputs": [{"name": "username", "type": "string"}],
+        "name": "getAddressByUsername",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+
+def is_twitter_verified(username: str) -> bool:
+    """Check if a Twitter username has a verified binding in TwitterRegistry.
+
+    Returns True if the username is bound to a non-zero address.
+    Returns False if the registry is not configured or the username is not bound.
+    """
+    if not settings.twitter_registry_address:
+        return False
+    w3, _, _ = _init()
+    addr = Web3.to_checksum_address(settings.twitter_registry_address)
+    registry = w3.eth.contract(address=addr, abi=TWITTER_REGISTRY_ABI)
+    bound_addr = registry.functions.getAddressByUsername(username).call()
+    return bound_addr != "0x" + "0" * 40

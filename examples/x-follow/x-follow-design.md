@@ -12,7 +12,7 @@ XFollowDealContract is a concrete DealContract implementation for the **"A pays 
 - **Verification system:** Single verification slot, requiring the spec to be `XFollowVerifierSpec`
 - **Payment token:** USDC
 - **Tags:** `["x", "follow"]`
-- **Verification semantics:** Weak semantics — verifier checks whether the follow relationship exists **at verification time**, not whether it was established after the deal was created. The `instruction()` requires A to confirm B is not already following the target before creating the deal.
+- **Verification semantics:** Weak semantics — verifier checks whether the follow relationship exists **at verification time**, not whether it was established after the deal was created. Pre-check at sign time: B must have a verified Twitter identity via `TwitterRegistry`, OR must not already be following the target.
 - **Off-chain verification:** Dual-provider parallel check via twitterapi.io (`check_follow_relationship`) + twitter-api45 (`checkfollow.php`). Any provider confirms → pass; both deny → fail; both error → inconclusive.
 
 ---
@@ -194,11 +194,12 @@ sequenceDiagram
     P-->>A: async message
     Note over A,B: Both parties agree on reward, target account, etc.
 
-    Note over A: ⚠️ Confirm B is NOT already following target_username
+    Note over A: ⚠️ Pre-check: B has verified Twitter identity<br/>via TwitterRegistry, OR is NOT already following target_username
 
     Note over A,V: Obtain Verifier Signature
     A->>P: 🟣 request_sign(verifier_address, params, deadline)<br/>params = {follower_username, target_username}
     P-->>V: async message {action: "request_sign", params, deadline, tag}
+    Note over V: Pre-check: TwitterRegistry.getAddressByUsername(follower) != 0x0<br/>OR dual-provider check confirms NOT already following
     V->>P: 🟣 send_message reply
     P-->>A: async message {accepted: true, fee, sig, tag}<br/>or {accepted: false, reason, tag}
 
@@ -551,3 +552,4 @@ At Verifier timeout resetVerification:
 | 2 | `on_chain_verifier == self.contract_address` | Skip notification |
 | 3 | `on_chain_fee > 0` | Skip notification |
 | 4 | `verify_fee > 0` (at sign time) | Reject signature request |
+| 5 | TwitterRegistry verified OR not already following (at sign time) | Reject signature request |
