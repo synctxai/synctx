@@ -19,7 +19,7 @@ contract XFollowVerifier is VerifierBase {
     // ============ 常量 ============
 
     /// @notice 签名时程序验证 deadline <= now + MAX_SIGN_DEADLINE_SECONDS
-    uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 3600;
+    uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 7 days;
 
     // ============ 不可变量 ============
 
@@ -42,7 +42,7 @@ contract XFollowVerifier is VerifierBase {
             "Verify follow relationships on X (Twitter) for campaign model. "
             "Per-campaign signature (target_username + fee + deadline). "
             "Dual-provider verification: twitterapi.io + twitter-api45. "
-            "EIP-712 signed, max sign deadline 3600s.";
+            "EIP-712 signed, max sign deadline 7 days.";
     }
 
     /// @inheritdoc IVerifier

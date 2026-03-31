@@ -37,11 +37,11 @@ XFollowFactory（开发者部署一次）
 
 ### 1.3 要点
 
-- **继承链：** `IDeal → DealBase → XFollowCampaign`（子合约），`XFollowFactory`（部署器）
+- **继承链：** `XFollowFactory` 与 `XFollowCampaign` 都是完整的 `IDeal → DealBase` 合约；factory 负责入口与索引，child 负责实际 campaign 执行
 - **Clone 模式：** EIP-1167 最小代理。所有子合约共享 implementation 字节码，各自有独立 storage
 - **Gasless：** 工厂设置 `trustedForwarder` → 子合约继承 → A 的 createCampaign 和 B 的 claim() 均通过 relayer 免 gas。Gas 由开发者的 relayer vault 支付
 - **生命周期：** `createCampaign()` → 子合约直接进入 OPEN（无 TESTING 阶段）
-- **自动注册：** 工厂 emit `SubContractCreated(address campaign, address creator)` → 平台监听工厂事件 → 自动发现并注册子合约（每个实现 IDeal 接口）
+- **自动注册：** 工厂 emit `SubContractCreated(address subContract)` → 平台监听工厂事件 → 自动发现并注册子合约
 - **身份：** `TwitterRegistry` 绑定为 B 的强制要求
 - **协议费：** 按 claim 收取，从 campaign 预算扣除 → 开发者的 feeCollector
 - **失败限制：** `MAX_FAILURES = 3`，每地址每 campaign
@@ -53,7 +53,7 @@ XFollowFactory（开发者部署一次）
 ### 2.1 XFollowFactory
 
 ```solidity
-contract XFollowFactory {
+contract XFollowFactory is DealBase {
 
     // ===================== 不可变量 =====================
 
@@ -142,7 +142,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
-| `initialize(...)` | 仅工厂 | 设置 campaign 参数。仅可调用一次，仅工厂可调 |
+| `initialize(...)` | 仅工厂 | 设置 campaign 参数并立即进入 OPEN。仅可调用一次，仅工厂可调 |
 | `claim()` | 任何 B（免 gas） | 无参数。从 TwitterRegistry 读取用户名。从预算锁定 claimCost。发出 VerificationRequested。返回 dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → 付款给 B；result<0 → 奖励退回预算，failCount++；result==0 → 全部退回 |
 | `resetVerification(dealIndex, 0)` | 任何人 | VERIFICATION_TIMEOUT 后。全额 claimCost 退回预算 |

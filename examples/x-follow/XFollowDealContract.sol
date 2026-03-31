@@ -12,9 +12,8 @@ import "./ERC2771Mixin.sol";
 /// @title XFollowDealContract - X 付费关注 Campaign 合约
 /// @notice 合约即 campaign。A 存入预算，任何 TwitterRegistry 认证用户可关注后领取固定奖励。
 ///         每个 B 的 claim() 创建一个新的 dealIndex。全自动，无需协商。
-/// @dev 生命周期：TESTING → OPEN → CLOSED
-///      TESTING：A 可修改参数、加减预算
-///      OPEN：参数锁定，接受 claim
+/// @dev 生命周期：OPEN → CLOSED
+///      OPEN：createDeal() 成功后立即生效，接受 claim
 ///      CLOSED：不接受新 claim（deadline 到期或预算耗尽自动触发）
 contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
@@ -29,7 +28,6 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     error InvalidVerifierSignature();
     error SignatureExpired();
     error InvalidSpecAddress();
-    error AlreadyInitialized();
     error CampaignNotOpen();
     error BudgetExhausted();
     error AlreadyClaimed();
@@ -62,13 +60,8 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== campaignStatus 常量 =====================
 
-    uint8 constant TESTING              = 0;
     uint8 constant OPEN                 = 1;
     uint8 constant CLOSED               = 2;
-
-    // ===================== 事件 =====================
-
-    event CampaignActivated();
 
     // ===================== 类型 =====================
 
@@ -93,7 +86,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     // ===================== Campaign 存储 =====================
 
     address public partyA;
-    uint8   public campaignStatus;       // TESTING / OPEN / CLOSED
+    uint8   public campaignStatus;       // OPEN / CLOSED
     address public verifier;
     uint96  public rewardPerFollow;
     uint96  public verifierFee;
@@ -142,7 +135,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== Campaign 设置 =====================
 
-    /// @notice 创建 campaign（仅一次），状态进入 TESTING
+    /// @notice 创建 campaign（仅一次），成功后立即进入 OPEN
     function createDeal(
         uint96  grossAmount,
         address verifier_,
@@ -163,6 +156,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (verifier_.code.length == 0) revert VerifierNotContract();
         if (sig.length == 0) revert InvalidVerifierSignature();
         if (sigDeadline < deadline_) revert SignatureExpired();
+        if (grossAmount < rewardPerFollow_ + verifierFee_ + PROTOCOL_FEE) revert InsufficientBudget();
 
         string memory canonicalTarget = _canonicalizeUsername(target_username_);
         if (bytes(canonicalTarget).length == 0) revert InvalidParams();
@@ -174,7 +168,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
         // 设置 campaign
         partyA = sender;
-        campaignStatus = TESTING;
+        campaignStatus = OPEN;
         verifier = verifier_;
         rewardPerFollow = rewardPerFollow_;
         verifierFee = verifierFee_;
@@ -185,57 +179,6 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         verifierSignature = sig;
 
         return 0; // campaign 本身不需要 dealIndex
-    }
-
-    /// @notice TESTING 期间修改参数（需重新获取 verifier 签名）
-    function updateParams(
-        uint96  rewardPerFollow_,
-        uint96  verifierFee_,
-        uint48  deadline_,
-        uint256 sigDeadline,
-        bytes calldata sig,
-        string calldata target_username_
-    ) external onlyA {
-        if (campaignStatus != TESTING) revert InvalidStatus();
-        if (rewardPerFollow_ == 0) revert InvalidParams();
-        if (deadline_ <= block.timestamp) revert InvalidParams();
-        if (sigDeadline < deadline_) revert SignatureExpired();
-
-        string memory canonicalTarget = _canonicalizeUsername(target_username_);
-        if (bytes(canonicalTarget).length == 0) revert InvalidParams();
-
-        _verifyVerifierSignature(verifier, canonicalTarget, verifierFee_, sigDeadline, sig);
-
-        rewardPerFollow = rewardPerFollow_;
-        verifierFee = verifierFee_;
-        deadline = deadline_;
-        signatureDeadline = sigDeadline;
-        target_username = canonicalTarget;
-        verifierSignature = sig;
-    }
-
-    /// @notice TESTING 期间增加预算
-    function addBudget(uint96 amount) external onlyA {
-        if (campaignStatus != TESTING) revert InvalidStatus();
-        if (!IERC20(feeToken).transferFrom(_msgSender(), address(this), amount)) revert TransferFailed();
-        budget += amount;
-    }
-
-    /// @notice TESTING 期间减少预算
-    function removeBudget(uint96 amount) external onlyA {
-        if (campaignStatus != TESTING) revert InvalidStatus();
-        if (amount > budget) revert InsufficientBudget();
-        budget -= amount;
-        if (!IERC20(feeToken).transfer(partyA, amount)) revert TransferFailed();
-    }
-
-    /// @notice TESTING → OPEN，参数锁定
-    function activate() external onlyA {
-        if (campaignStatus != TESTING) revert InvalidStatus();
-        if (budget < _claimCost()) revert InsufficientBudget();
-        if (signatureDeadline < deadline) revert SignatureExpired();
-        campaignStatus = OPEN;
-        emit CampaignActivated();
     }
 
     // ===================== Claim（每个 claim = 一个 dealIndex） =====================
@@ -564,9 +507,8 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
             "# X Follow Deal (Campaign)\n\n"
             "Pay fixed USDC reward per follow to a target account on X. 1-to-many campaign model.\n\n"
             "## Campaign Lifecycle\n\n"
-            "TESTING -> OPEN -> CLOSED\n\n"
-            "- **TESTING**: A can modify params (updateParams), add/remove budget. Call activate() to go live.\n"
-            "- **OPEN**: Params locked, anyone with TwitterRegistry binding can claim().\n"
+            "OPEN -> CLOSED\n\n"
+            "- **OPEN**: Campaign goes live immediately after createDeal(). Params are locked, anyone with TwitterRegistry binding can claim().\n"
             "- **CLOSED**: Auto-triggered on deadline or budget exhaustion. A calls withdrawRemaining().\n\n"
             "## For Followers (B)\n\n"
             "1. Bind your Twitter via TwitterRegistry (if not already)\n"

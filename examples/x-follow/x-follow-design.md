@@ -37,11 +37,11 @@ XFollowFactory (developer deploys once)
 
 ### 1.3 Key Points
 
-- **Inheritance:** `IDeal → DealBase → XFollowCampaign` (child), `XFollowFactory` (deployer)
+- **Inheritance:** both `XFollowFactory` and `XFollowCampaign` are full `IDeal → DealBase` contracts; factory is the parent entry/index, child is the executable campaign
 - **Clone pattern:** EIP-1167 minimal proxy. All children share implementation bytecode, each has own storage
 - **Gasless:** Factory sets `trustedForwarder` → children inherit → A's createCampaign and B's claim() both gasless via relayer. Gas paid from developer's relayer vault
 - **Lifecycle:** `createCampaign()` → child enters OPEN immediately (no TESTING phase)
-- **Auto-registration:** Factory emits `SubContractCreated(address campaign, address creator)` → platform monitors factory events → auto-discovers and registers child contracts (each implements IDeal)
+- **Auto-registration:** Factory emits `SubContractCreated(address subContract)` → platform monitors factory events → auto-discovers and registers child contracts
 - **Identity:** `TwitterRegistry` binding mandatory for B
 - **Protocol fee:** Per-claim, from campaign budget → developer's feeCollector
 - **Failure limit:** `MAX_FAILURES = 3` per address per campaign
@@ -53,7 +53,7 @@ XFollowFactory (developer deploys once)
 ### 2.1 XFollowFactory
 
 ```solidity
-contract XFollowFactory {
+contract XFollowFactory is DealBase {
 
     // ===================== Immutable =====================
 
@@ -142,7 +142,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
 | Method | Caller | Description |
 |--------|--------|-------------|
-| `initialize(...)` | Factory only | Set campaign params. Can only be called once, only by factory |
+| `initialize(...)` | Factory only | Set campaign params and enter OPEN immediately. Can only be called once, only by factory |
 | `claim()` | Any B (gasless) | No args. Read TwitterRegistry for username. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → pay B; result<0 → reward to budget, failCount++; result==0 → all to budget |
 | `resetVerification(dealIndex, 0)` | Anyone | After VERIFICATION_TIMEOUT. Full claimCost returns to budget |

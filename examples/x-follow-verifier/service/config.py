@@ -2,7 +2,7 @@
 
 from pydantic_settings import BaseSettings
 
-SIGN_DEADLINE_SECONDS = 3600
+SIGN_DEADLINE_SECONDS = 7 * 24 * 3600
 
 
 class Settings(BaseSettings):
