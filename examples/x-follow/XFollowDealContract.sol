@@ -9,146 +9,109 @@ import "./Initializable.sol";
 import "./ERC2771Mixin.sol";
 
 
-/// @title XFollowDealContract - X 付费关注交易合约
-/// @notice 单合约管理所有交易。feeToken 通过 setFeeToken() 一次性设置（跨链统一地址）。
-/// @dev USDC approve · 紧凑存储 · 自定义错误 · 直接支付
-///      统一 dealStatus — status 字段直接存储 dealStatus 基础值，无内部 State 枚举
-///
-///      交易流程概览：
-///      1. A 创建交易，存入 USDC（reward + protocolFee），指定 B 和 Verifier
-///      2. B 接受交易（protocolFee 此时支付给 FeeCollector）
-///      3. B 在 X 上关注 target_username，然后调用 claimDone
-///      4. A 手动确认付款，或请求 Verifier 自动验证（双源：twitterapi.io + twitter-api45）
-///      5. 如果验证不确定或 Verifier 超时，进入协商阶段
+/// @title XFollowDealContract - X 付费关注 Campaign 合约
+/// @notice 合约即 campaign。A 存入预算，任何 TwitterRegistry 认证用户可关注后领取固定奖励。
+///         每个 B 的 claim() 创建一个新的 dealIndex。全自动，无需协商。
+/// @dev 生命周期：TESTING → OPEN → CLOSED
+///      TESTING：A 可修改参数、加减预算
+///      OPEN：参数锁定，接受 claim
+///      CLOSED：不接受新 claim（deadline 到期或预算耗尽自动触发）
 contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 错误 =====================
 
     error NotPartyA();
-    error NotPartyB();
     error NotVerifier();
-    error NotAorB();
     error InvalidStatus();
-    error NotTimedOut();
-    error AlreadyTimedOut();
-    error NoFunds();
     error InvalidParams();
     error TransferFailed();
-    error ViolatorCannot();
-    error VerificationNotTimedOut();
-    error ProposerCannotConfirm();
-    error InvalidSettlement();
-    error SettlementNotTimedOut();
-    error FeeTooLow();
-    error InvalidFeeCollector();
     error VerifierNotContract();
     error InvalidVerifierSignature();
     error SignatureExpired();
-    error InvalidVerificationIndex();
     error InvalidSpecAddress();
-    error InsufficientAllowance();
-    error InsufficientBalance();
+    error AlreadyInitialized();
+    error CampaignNotOpen();
+    error BudgetExhausted();
+    error AlreadyClaimed();
+    error MaxFailures();
+    error NotVerified();
+    error PendingClaim();
+    error NotClosed();
+    error PendingClaims();
+    error NoFunds();
+    error VerificationNotTimedOut();
+    error InvalidVerificationIndex();
+    error InsufficientBudget();
 
-    // ===================== dealStatus 常量 =====================
+    // ===================== dealStatus 常量（per-claim） =====================
     //
     //   存储基础值          dealStatus 派生值
     //   ─────────────       ──────────────────
-    //   WAITING_ACCEPT (0)  → ACCEPT_TIMED_OUT (1)
-    //   WAITING_CLAIM  (2)  → CLAIM_TIMED_OUT (3)
-    //   WAITING_CONFIRM(4)  → CONFIRM_TIMED_OUT (5)
-    //   VERIFYING      (6)  → VERIFIER_TIMED_OUT (7)
-    //   SETTLING       (8)  → SETTLEMENT_PROPOSED (9), SETTLEMENT_TIMED_OUT (10)
-    //   COMPLETED     (11)
-    //   VIOLATED      (12)
-    //   CANCELLED     (13)
-    //   FORFEITED     (14)
-    //   NOT_FOUND    (255)  — deal 不存在
+    //   VERIFYING      (0)  → VERIFIER_TIMED_OUT (1)
+    //   COMPLETED      (2)
+    //   REJECTED       (3)
+    //   TIMED_OUT      (4)
+    //   NOT_FOUND     (255)
 
-    uint8 constant WAITING_ACCEPT       = 0;
-    uint8 constant ACCEPT_TIMED_OUT     = 1;
-    uint8 constant WAITING_CLAIM        = 2;
-    uint8 constant CLAIM_TIMED_OUT      = 3;
-    uint8 constant WAITING_CONFIRM      = 4;
-    uint8 constant CONFIRM_TIMED_OUT    = 5;
-    uint8 constant VERIFYING            = 6;
-    uint8 constant VERIFIER_TIMED_OUT   = 7;
-    uint8 constant SETTLING             = 8;
-    uint8 constant SETTLEMENT_PROPOSED  = 9;
-    uint8 constant SETTLEMENT_TIMED_OUT = 10;
-    uint8 constant COMPLETED            = 11;
-    uint8 constant VIOLATED             = 12;
-    uint8 constant CANCELLED            = 13;
-    uint8 constant FORFEITED            = 14;
+    uint8 constant VERIFYING            = 0;
+    uint8 constant VERIFIER_TIMED_OUT   = 1;
+    uint8 constant COMPLETED            = 2;
+    uint8 constant REJECTED             = 3;
+    uint8 constant TIMED_OUT            = 4;
     uint8 constant NOT_FOUND            = 255;
+
+    // ===================== campaignStatus 常量 =====================
+
+    uint8 constant TESTING              = 0;
+    uint8 constant OPEN                 = 1;
+    uint8 constant CLOSED               = 2;
 
     // ===================== 类型 =====================
 
-    /// @dev 紧凑存储到最少的存储槽。
-    ///      单验证槽位特化（requiredSpecs().length == 1）。
-    struct Deal {
-        // 槽 1（28/32 字节）
-        address partyA;                   // 20 字节 — A 方地址（发起者/付款方）
-        uint48  stageTimestamp;           // 6 字节  — 当前阶段开始时间
-        uint8   status;                   // 1 字节  — dealStatus 基础值
-        bool    isRequesterA;             // 1 字节  — 验证请求方是否为 A（用于超时退费）
-        // 槽 2
-        address partyB;                   // 20 字节 — B 方地址（执行者/关注者）
-        uint96  amount;                   // 12 字节 — 托管金额（grossAmount - protocolFee）
-        // 槽 3 — Verifier 信息（槽位 0）
-        address verifier;                 // 20 字节 — Verifier 合约地址
-        uint96  verifierFee;              // 12 字节 — 验证费用
-        // 槽 4（26/32 字节 — violator 和 verificationTimestamp 互斥使用）
-        address violator;                 // 20 字节 — 违约方地址
-        uint48  verificationTimestamp;    // 6 字节  — 验证请求的时间戳
-        // 槽 5 — 签名截止时间（槽位 0）
-        uint256 signatureDeadline;
-        // 动态类型（各占独立的存储槽）
-        string  follower_username;       // 规范化后的用户名：无前导 @，全小写
-        string  target_username;         // 规范化后的被关注者用户名
-        bytes   verifierSignature;        // EIP-712 签名（槽位 0，65 字节）
-    }
-
-    /// @dev 协商提案，仅在 Settling 状态使用
-    struct Settlement {
-        address proposer;     // 20 字节 — 提案方
-        uint96  amountToA;    // 12 字节 — 提议给 A 的金额（剩余归 B）
+    struct Claim {
+        address claimer;             // B 的地址
+        uint48  timestamp;           // claim 创建时间
+        uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT
+        string  follower_username;   // claim 时从 TwitterRegistry 读取
     }
 
     // ===================== 常量 =====================
 
     uint96 public constant MIN_PROTOCOL_FEE = 10_000;
-    uint256 public constant STAGE_TIMEOUT = 30 minutes;
     uint256 public constant VERIFICATION_TIMEOUT = 30 minutes;
-    uint256 public constant SETTLING_TIMEOUT = 12 hours;
+    uint8 public constant MAX_FAILURES = 3;
 
     address public immutable FEE_COLLECTOR;
     uint96 public immutable PROTOCOL_FEE;
     address public immutable REQUIRED_SPEC;
+    address public immutable TWITTER_REGISTRY;
 
-    // ===================== 存储 =====================
+    // ===================== Campaign 存储 =====================
 
-    mapping(uint256 => Deal) internal deals;
-    mapping(uint256 => Settlement) internal settlements;
+    address public partyA;
+    uint8   public campaignStatus;       // TESTING / OPEN / CLOSED
+    address public verifier;
+    uint96  public rewardPerFollow;
+    uint96  public verifierFee;
+    uint48  public deadline;
+    uint96  public budget;
+    uint32  public pendingClaims;
+    uint32  public completedClaims;
+    uint256 public signatureDeadline;
+    string  public target_username;
+    bytes   public verifierSignature;
+
+    // ===================== Per-Claim 存储 =====================
+
+    mapping(uint256 => Claim) internal claims;
+    mapping(address => bool)  public claimed;
+    mapping(address => uint8) public failCount;
+    mapping(address => uint256) internal pendingClaimIndex;  // B → 当前 pending 的 dealIndex
 
     // ===================== 修饰器 =====================
 
-    modifier onlyA(uint256 dealIndex) {
-        if (_msgSender() != deals[dealIndex].partyA) revert NotPartyA();
-        _;
-    }
-
-    modifier onlyB(uint256 dealIndex) {
-        if (_msgSender() != deals[dealIndex].partyB) revert NotPartyB();
-        _;
-    }
-
-    modifier atStatus(uint256 dealIndex, uint8 s) {
-        if (deals[dealIndex].status != s) revert InvalidStatus();
-        _;
-    }
-
-    modifier notTimedOut(uint256 dealIndex) {
-        if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
+    modifier onlyA() {
+        if (_msgSender() != partyA) revert NotPartyA();
         _;
     }
 
@@ -159,421 +122,313 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 构造函数 =====================
 
-    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec) {
+    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address twitterRegistry) {
         _setInitializer();
         if (feeCollector == address(0) || feeCollector == address(this) || feeCollector.code.length == 0) {
-            revert InvalidFeeCollector();
+            revert InvalidParams();
         }
-        if (protocolFee_ < MIN_PROTOCOL_FEE) revert FeeTooLow();
+        if (protocolFee_ < MIN_PROTOCOL_FEE) revert InvalidParams();
         if (requiredSpec == address(0)) revert InvalidSpecAddress();
+        if (twitterRegistry == address(0)) revert InvalidParams();
         FEE_COLLECTOR = feeCollector;
         PROTOCOL_FEE = protocolFee_;
         REQUIRED_SPEC = requiredSpec;
+        TWITTER_REGISTRY = twitterRegistry;
     }
 
-    // ===================== 创建交易 =====================
+    // ===================== Campaign 设置 =====================
 
-    /// @notice 创建交易（需要预先 approve USDC）
+    /// @notice 创建 campaign（仅一次），状态进入 TESTING
     function createDeal(
-        address partyB,
         uint96  grossAmount,
-        address verifier,
-        uint96  verifierFee,
-        uint256 deadline,
+        address verifier_,
+        uint96  verifierFee_,
+        uint96  rewardPerFollow_,
+        uint256 sigDeadline,
         bytes calldata sig,
-        string calldata follower_username,
-        string calldata target_username
-    ) external returns (uint256 dealIndex) {
-        // --- 参数校验 ---
+        string calldata target_username_,
+        uint48  deadline_
+    ) external returns (uint256) {
+        if (partyA != address(0)) revert AlreadyInitialized();
         address sender = _msgSender();
-        if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
-        if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
-        if (partyB == address(0)) revert InvalidParams();
-        if (sender == partyB) revert InvalidParams();
 
-        if (verifier == address(0)) revert InvalidParams();
-        if (sender == verifier || partyB == verifier) revert InvalidParams();
-        if (verifier.code.length == 0) revert VerifierNotContract();
+        if (rewardPerFollow_ == 0) revert InvalidParams();
+        if (deadline_ <= block.timestamp) revert InvalidParams();
+        if (verifier_ == address(0)) revert InvalidParams();
+        if (sender == verifier_) revert InvalidParams();
+        if (verifier_.code.length == 0) revert VerifierNotContract();
         if (sig.length == 0) revert InvalidVerifierSignature();
-        if (deadline < block.timestamp) revert SignatureExpired();
+        if (sigDeadline < deadline_) revert SignatureExpired();
 
-        string memory canonicalFollower = _canonicalizeUsername(follower_username);
-        string memory canonicalTarget = _canonicalizeUsername(target_username);
-        if (bytes(canonicalFollower).length == 0 || bytes(canonicalTarget).length == 0) revert InvalidParams();
+        string memory canonicalTarget = _canonicalizeUsername(target_username_);
+        if (bytes(canonicalTarget).length == 0) revert InvalidParams();
 
-        _verifyVerifierSignature(verifier, canonicalFollower, canonicalTarget, verifierFee, deadline, sig);
+        _verifyVerifierSignature(verifier_, canonicalTarget, verifierFee_, sigDeadline, sig);
 
-        // --- USDC 转入托管 ---
+        // USDC 转入
         if (!IERC20(feeToken).transferFrom(sender, address(this), grossAmount)) revert TransferFailed();
 
-        // --- 创建交易记录 ---
+        // 设置 campaign
+        partyA = sender;
+        campaignStatus = TESTING;
+        verifier = verifier_;
+        rewardPerFollow = rewardPerFollow_;
+        verifierFee = verifierFee_;
+        deadline = deadline_;
+        budget = grossAmount;
+        signatureDeadline = sigDeadline;
+        target_username = canonicalTarget;
+        verifierSignature = sig;
+
+        return 0; // campaign 本身不需要 dealIndex
+    }
+
+    /// @notice TESTING 期间修改参数（需重新获取 verifier 签名）
+    function updateParams(
+        uint96  rewardPerFollow_,
+        uint96  verifierFee_,
+        uint48  deadline_,
+        uint256 sigDeadline,
+        bytes calldata sig,
+        string calldata target_username_
+    ) external onlyA {
+        if (campaignStatus != TESTING) revert InvalidStatus();
+        if (rewardPerFollow_ == 0) revert InvalidParams();
+        if (deadline_ <= block.timestamp) revert InvalidParams();
+        if (sigDeadline < deadline_) revert SignatureExpired();
+
+        string memory canonicalTarget = _canonicalizeUsername(target_username_);
+        if (bytes(canonicalTarget).length == 0) revert InvalidParams();
+
+        _verifyVerifierSignature(verifier, canonicalTarget, verifierFee_, sigDeadline, sig);
+
+        rewardPerFollow = rewardPerFollow_;
+        verifierFee = verifierFee_;
+        deadline = deadline_;
+        signatureDeadline = sigDeadline;
+        target_username = canonicalTarget;
+        verifierSignature = sig;
+    }
+
+    /// @notice TESTING 期间增加预算
+    function addBudget(uint96 amount) external onlyA {
+        if (campaignStatus != TESTING) revert InvalidStatus();
+        if (!IERC20(feeToken).transferFrom(_msgSender(), address(this), amount)) revert TransferFailed();
+        budget += amount;
+    }
+
+    /// @notice TESTING 期间减少预算
+    function removeBudget(uint96 amount) external onlyA {
+        if (campaignStatus != TESTING) revert InvalidStatus();
+        if (amount > budget) revert InsufficientBudget();
+        budget -= amount;
+        if (!IERC20(feeToken).transfer(partyA, amount)) revert TransferFailed();
+    }
+
+    /// @notice TESTING → OPEN，参数锁定
+    function activate() external onlyA {
+        if (campaignStatus != TESTING) revert InvalidStatus();
+        if (budget < _claimCost()) revert InsufficientBudget();
+        if (signatureDeadline < deadline) revert SignatureExpired();
+        campaignStatus = OPEN;
+    }
+
+    // ===================== Claim（每个 claim = 一个 dealIndex） =====================
+
+    /// @notice B 领取关注奖励。无参数，合约从 TwitterRegistry 读取 B 的用户名。
+    function claim() external returns (uint256 dealIndex) {
+        // 检查并可能触发 auto-close
+        _checkAndClose();
+        if (campaignStatus != OPEN) revert CampaignNotOpen();
+
+        address sender = _msgSender();
+        if (claimed[sender]) revert AlreadyClaimed();
+        if (failCount[sender] >= MAX_FAILURES) revert MaxFailures();
+
+        // 检查是否有 pending claim
+        if (_hasPendingClaim(sender)) revert PendingClaim();
+
+        // 从 TwitterRegistry 读取用户名
+        (bool success, bytes memory data) = TWITTER_REGISTRY.staticcall(
+            abi.encodeWithSignature("usernameOf(address)", sender)
+        );
+        if (!success) revert NotVerified();
+        string memory followerUsername = abi.decode(data, (string));
+        if (bytes(followerUsername).length == 0) revert NotVerified();
+
+        uint96 cost = _claimCost();
+        if (budget < cost) {
+            // 预算不足，auto-close
+            if (pendingClaims == 0) {
+                campaignStatus = CLOSED;
+            }
+            revert BudgetExhausted();
+        }
+
+        // 锁定费用
+        budget -= cost;
+
+        // 创建 claim（= dealIndex）
         {
-            address[] memory traders = new address[](2);
+            address[] memory traders = new address[](1);
             traders[0] = sender;
-            traders[1] = partyB;
             address[] memory verifiers = new address[](1);
             verifiers[0] = verifier;
             dealIndex = _recordStart(traders, verifiers);
         }
 
-        {
-            Deal storage d = deals[dealIndex];
-            d.partyA = sender;
-            d.partyB = partyB;
-            d.verifier = verifier;
-            d.amount = grossAmount - PROTOCOL_FEE;
-            d.verifierFee = verifierFee;
-            d.follower_username = canonicalFollower;
-            d.target_username = canonicalTarget;
-            d.signatureDeadline = deadline;
-            d.verifierSignature = sig;
-            d.status = WAITING_ACCEPT;
-            d.stageTimestamp = uint48(block.timestamp);
-        }
+        claims[dealIndex] = Claim({
+            claimer: sender,
+            timestamp: uint48(block.timestamp),
+            status: VERIFYING,
+            follower_username: followerUsername
+        });
+        pendingClaimIndex[sender] = dealIndex;
+        pendingClaims++;
 
-        _emitStateChanged(dealIndex, WAITING_ACCEPT);
-    }
-
-    // ===================== 核心流程 =====================
-
-    /// @notice B 接受交易
-    function accept(uint256 dealIndex)
-        external
-        onlyB(dealIndex)
-        atStatus(dealIndex, WAITING_ACCEPT)
-        notTimedOut(dealIndex)
-    {
-        Deal storage d = deals[dealIndex];
-        uint96 fee = PROTOCOL_FEE;
-        d.status = WAITING_CLAIM;
-        d.stageTimestamp = uint48(block.timestamp);
-
+        _emitStateChanged(dealIndex, VERIFYING);
         _emitPhaseChanged(dealIndex, 2); // → Active
-        _emitStateChanged(dealIndex, WAITING_CLAIM);
 
-        if (!IERC20(feeToken).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
+        emit VerificationRequested(dealIndex, 0, verifier);
     }
 
-    /// @notice B 声称已完成关注
-    function claimDone(uint256 dealIndex)
-        external
-        onlyB(dealIndex)
-        atStatus(dealIndex, WAITING_CLAIM)
-        notTimedOut(dealIndex)
-    {
-        Deal storage d = deals[dealIndex];
-        d.status = WAITING_CONFIRM;
-        d.stageTimestamp = uint48(block.timestamp);
-
-        _emitStateChanged(dealIndex, WAITING_CONFIRM);
-    }
-
-    /// @notice A 手动确认并直接付款给 B（跳过验证）
-    function confirmAndPay(uint256 dealIndex)
-        external
-        onlyA(dealIndex)
-        atStatus(dealIndex, WAITING_CONFIRM)
-    {
-        Deal storage d = deals[dealIndex];
-        uint96 amt = d.amount;
-        d.amount = 0;
-        d.status = COMPLETED;
-
-        _emitStateChanged(dealIndex, COMPLETED);
-        _emitPhaseChanged(dealIndex, 3); // → Success
-
-        if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
-    }
-
-    // ===================== 取消（WAITING_ACCEPT → CANCELLED） =====================
-
-    /// @notice A 取消 B 尚未接受的交易（WAITING_ACCEPT + 已超时）
-    function cancelDeal(uint256 dealIndex)
-        external
-        onlyA(dealIndex)
-        atStatus(dealIndex, WAITING_ACCEPT)
-    {
-        if (!_isStageTimedOut(dealIndex)) revert NotTimedOut();
-
-        Deal storage d = deals[dealIndex];
-        uint96 amt = d.amount + PROTOCOL_FEE;
-        d.amount = 0;
-        d.status = CANCELLED;
-
-        _emitPhaseChanged(dealIndex, 5); // → Cancelled
-        _emitStateChanged(dealIndex, CANCELLED);
-
-        if (amt > 0) {
-            if (!IERC20(feeToken).transfer(d.partyA, amt)) revert TransferFailed();
-        }
-    }
-
-    // ===================== 验证 =====================
-
-    /// @notice Trader 触发验证（调用者通过 approve 支付验证费）
-    function requestVerification(uint256 dealIndex, uint256 verificationIndex)
-        external
-        override
-        atStatus(dealIndex, WAITING_CONFIRM)
-        onlySlot0(verificationIndex)
-    {
-        Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
-
-        uint96 fee = d.verifierFee;
-        address verifier = d.verifier;
-
-        if (IERC20(feeToken).allowance(sender, address(this)) < fee) revert InsufficientAllowance();
-        if (IERC20(feeToken).balanceOf(sender) < fee) revert InsufficientBalance();
-
-        // CEI：先改状态
-        d.status = VERIFYING;
-        d.isRequesterA = (sender == d.partyA);
-        d.verificationTimestamp = uint48(block.timestamp);
-
-        emit VerificationRequested(dealIndex, verificationIndex, verifier);
-
-        if (!IERC20(feeToken).transferFrom(sender, address(this), fee)) revert TransferFailed();
-    }
+    // ===================== 验证结果回调 =====================
 
     /// @notice Verifier 提交验证结果
-    /// @dev result > 0 → 通过（B 确实关注了 target），付款给 B
-    ///      result < 0 → 失败（B 未关注），B 违约
-    ///      result == 0 → 不确定（双源 API 均失败），进入协商
-    function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata /* reason */) external override onlySlot0(verificationIndex) {
-        Deal storage d = deals[dealIndex];
+    function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata /* reason */)
+        external override onlySlot0(verificationIndex)
+    {
+        if (msg.sender != verifier) revert NotVerifier();
+        Claim storage c = claims[dealIndex];
+        if (c.status != VERIFYING) revert InvalidStatus();
 
-        if (msg.sender != d.verifier) revert NotVerifier();
-        if (d.status != VERIFYING) revert InvalidStatus();
+        uint96 reward = rewardPerFollow;
+        uint96 vFee = verifierFee;
+        uint96 pFee = PROTOCOL_FEE;
+        address claimer = c.claimer;
 
-        // 清除验证时间戳
-        d.verificationTimestamp = 0;
+        pendingClaims--;
+        delete pendingClaimIndex[claimer];
 
-        uint96 vFee = d.verifierFee;
-        uint96 transferToB = 0;
-
-        if (result > 0) {
-            transferToB = d.amount;
-            d.amount = 0;
-            d.status = COMPLETED;
-        } else if (result < 0) {
-            d.status = VIOLATED;
-            d.violator = d.partyB;
-        } else {
-            d.status = SETTLING;
-            d.stageTimestamp = uint48(block.timestamp);
-        }
-
-        // --- 事件 ---
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
         if (result > 0) {
+            // 通过：付款给 B
+            c.status = COMPLETED;
+            claimed[claimer] = true;
+            completedClaims++;
+
             _emitStateChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
+
+            if (!IERC20(feeToken).transfer(claimer, reward)) revert TransferFailed();
+            if (vFee > 0) {
+                if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
+            }
+            if (!IERC20(feeToken).transfer(FEE_COLLECTOR, pFee)) revert TransferFailed();
+
         } else if (result < 0) {
-            _emitViolated(dealIndex, d.partyB);
-            _emitStateChanged(dealIndex, VIOLATED);
+            // 失败：奖励退回预算，verifier + protocol 照付
+            c.status = REJECTED;
+            failCount[claimer]++;
+            budget += reward;
+
+            _emitStateChanged(dealIndex, REJECTED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
+
+            if (vFee > 0) {
+                if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
+            }
+            if (!IERC20(feeToken).transfer(FEE_COLLECTOR, pFee)) revert TransferFailed();
+
         } else {
-            _emitStateChanged(dealIndex, SETTLING);
+            // 不确定：全额退回预算
+            c.status = REJECTED;
+            budget += reward + vFee + pFee;
+
+            _emitStateChanged(dealIndex, REJECTED);
+            _emitPhaseChanged(dealIndex, 4); // → Failed
         }
 
-        // --- 交互：所有转账最后执行 ---
-        if (vFee > 0) {
-            if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
-        }
-        if (transferToB > 0) {
-            if (!IERC20(feeToken).transfer(d.partyB, transferToB)) revert TransferFailed();
-        }
+        // 检查是否应 auto-close
+        _checkAndClose();
     }
 
-    // ===================== 验证重置 =====================
+    // ===================== 验证超时重置 =====================
 
-    /// @notice Verifier 超时后重置验证，退还验证费，进入协商
+    /// @notice Verifier 超时后重置 claim，全额退回预算
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
-        external
-        atStatus(dealIndex, VERIFYING)
-        onlySlot0(verificationIndex)
+        external onlySlot0(verificationIndex)
     {
-        Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (block.timestamp <= uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT)
-            revert VerificationNotTimedOut();
+        Claim storage c = claims[dealIndex];
+        if (c.status != VERIFYING) revert InvalidStatus();
+        if (block.timestamp <= uint256(c.timestamp) + VERIFICATION_TIMEOUT) revert VerificationNotTimedOut();
 
-        address requester = d.isRequesterA ? d.partyA : d.partyB;
-        uint96 vFee = d.verifierFee;
+        c.status = TIMED_OUT;
+        pendingClaims--;
+        delete pendingClaimIndex[c.claimer];
+        budget += _claimCost();
 
-        // CEI：先改状态
-        d.verificationTimestamp = 0;
-        d.status = SETTLING;
-        d.stageTimestamp = uint48(block.timestamp);
-
-        _emitStateChanged(dealIndex, SETTLING);
-
-        if (vFee > 0) {
-            if (!IERC20(feeToken).transfer(requester, vFee)) revert TransferFailed();
-        }
-    }
-
-    // ===================== 协商 =====================
-
-    /// @notice 提出协商方案：amountToA 是给 A 的金额（剩余归 B）
-    function proposeSettlement(uint256 dealIndex, uint96 amountToA)
-        external
-        atStatus(dealIndex, SETTLING)
-    {
-        Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
-        if (amountToA > d.amount) revert InvalidSettlement();
-
-        settlements[dealIndex] = Settlement({
-            proposer: sender,
-            amountToA: amountToA
-        });
-
-    }
-
-    /// @notice 确认对方的协商提案
-    function confirmSettlement(uint256 dealIndex)
-        external
-        atStatus(dealIndex, SETTLING)
-    {
-        Deal storage d = deals[dealIndex];
-        Settlement storage stl = settlements[dealIndex];
-        address sender = _msgSender();
-
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (sender == stl.proposer) revert ProposerCannotConfirm();
-        if (stl.proposer == address(0)) revert InvalidSettlement();
-
-        uint96 toA = stl.amountToA;
-        uint96 toB = d.amount - toA;
-        d.amount = 0;
-        d.status = COMPLETED;
-
-        delete settlements[dealIndex];
-
-        _emitStateChanged(dealIndex, COMPLETED);
-        _emitPhaseChanged(dealIndex, 3); // → Success
-
-        if (toA > 0) {
-            if (!IERC20(feeToken).transfer(d.partyA, toA)) revert TransferFailed();
-        }
-        if (toB > 0) {
-            if (!IERC20(feeToken).transfer(d.partyB, toB)) revert TransferFailed();
-        }
-    }
-
-    /// @notice 协商超时，资金没收到 FeeCollector
-    function triggerSettlementTimeout(uint256 dealIndex)
-        external
-        atStatus(dealIndex, SETTLING)
-    {
-        Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (block.timestamp <= uint256(d.stageTimestamp) + SETTLING_TIMEOUT) revert SettlementNotTimedOut();
-
-        uint96 seized = d.amount;
-        d.amount = 0;
-        d.status = FORFEITED;
-        delete settlements[dealIndex];
-
-        _emitStateChanged(dealIndex, FORFEITED);
+        _emitStateChanged(dealIndex, TIMED_OUT);
         _emitPhaseChanged(dealIndex, 4); // → Failed
 
-        if (seized > 0) {
-            if (!IERC20(feeToken).transfer(FEE_COLLECTOR, seized)) revert TransferFailed();
-        }
+        _checkAndClose();
     }
 
-    // ===================== 超时 =====================
+    // ===================== Campaign 结束 =====================
 
-    /// @notice 触发当前阶段的超时处理
-    /// @dev WAITING_CLAIM 超时：B 未 claimDone → B 违约
-    ///      WAITING_CONFIRM 超时：A 未确认 → 自动付款给 B
-    function triggerTimeout(uint256 dealIndex) external {
-        Deal storage d = deals[dealIndex];
-        if (!_isStageTimedOut(dealIndex)) revert NotTimedOut();
+    /// @notice CLOSED 且无 pending 时，A 提取剩余预算
+    function withdrawRemaining() external onlyA {
+        if (campaignStatus != CLOSED) revert NotClosed();
+        if (pendingClaims > 0) revert PendingClaims();
+        if (budget == 0) revert NoFunds();
 
-        uint8 s = d.status;
-
-        if (s == WAITING_CLAIM) {
-            // B 未 claimDone → B 违约
-            if (_msgSender() != d.partyA) revert NotPartyA();
-            d.status = VIOLATED;
-            d.violator = d.partyB;
-            _emitViolated(dealIndex, d.partyB);
-            _emitStateChanged(dealIndex, VIOLATED);
-            _emitPhaseChanged(dealIndex, 4); // → Failed
-
-        } else if (s == WAITING_CONFIRM) {
-            // A 未确认 → 自动付款给 B
-            if (_msgSender() != d.partyB) revert NotPartyB();
-            uint96 amt = d.amount;
-            d.amount = 0;
-            d.status = COMPLETED;
-            _emitStateChanged(dealIndex, COMPLETED);
-            _emitPhaseChanged(dealIndex, 3); // → Success
-            if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
-
-        } else {
-            revert InvalidStatus();
-        }
-    }
-
-    /// @notice 违约后提取资金
-    function withdraw(uint256 dealIndex) external atStatus(dealIndex, VIOLATED) {
-        Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (sender == d.violator) revert ViolatorCannot();
-        if (d.amount == 0) revert NoFunds();
-
-        uint96 amt = d.amount;
-        d.amount = 0;
-
-        if (!IERC20(feeToken).transfer(sender, amt)) revert TransferFailed();
+        uint96 amt = budget;
+        budget = 0;
+        if (!IERC20(feeToken).transfer(partyA, amt)) revert TransferFailed();
     }
 
     // ===================== 内部辅助函数 =====================
 
-    function _verifyVerifierSignature(
-        address verifier,
-        string memory canonicalFollower,
-        string memory canonicalTarget,
-        uint96 fee,
-        uint256 deadline,
-        bytes calldata sig
-    ) internal view {
-        address verifierSpec = IVerifier(verifier).spec();
-        if (verifierSpec != REQUIRED_SPEC) revert InvalidSpecAddress();
-        address recovered = XFollowVerifierSpec(verifierSpec).check(verifier, canonicalFollower, canonicalTarget, uint256(fee), deadline, sig);
-        if (recovered != IVerifier(verifier).signer()) revert InvalidVerifierSignature();
+    function _claimCost() internal view returns (uint96) {
+        return rewardPerFollow + verifierFee + PROTOCOL_FEE;
     }
 
-    /// @dev 检查当前阶段是否已超时（基于 stageTimestamp）
-    function _isStageTimedOut(uint256 dealIndex) internal view returns (bool) {
-        Deal storage d = deals[dealIndex];
-        uint256 timeout = d.status == SETTLING ? SETTLING_TIMEOUT : STAGE_TIMEOUT;
-        return block.timestamp > uint256(d.stageTimestamp) + timeout;
+    function _checkAndClose() internal {
+        if (campaignStatus != OPEN) return;
+        if (block.timestamp > deadline) {
+            campaignStatus = CLOSED;
+        } else if (budget < _claimCost() && pendingClaims == 0) {
+            campaignStatus = CLOSED;
+        }
+    }
+
+    function _hasPendingClaim(address addr) internal view returns (bool) {
+        uint256 idx = pendingClaimIndex[addr];
+        return claims[idx].claimer == addr && claims[idx].status == VERIFYING;
+    }
+
+    function _verifyVerifierSignature(
+        address verifier_,
+        string memory canonicalTarget,
+        uint96 fee,
+        uint256 sigDeadline,
+        bytes calldata sig
+    ) internal view {
+        address verifierSpec = IVerifier(verifier_).spec();
+        if (verifierSpec != REQUIRED_SPEC) revert InvalidSpecAddress();
+        address recovered = XFollowVerifierSpec(verifierSpec).check(
+            verifier_, canonicalTarget, uint256(fee), sigDeadline, sig
+        );
+        if (recovered != IVerifier(verifier_).signer()) revert InvalidVerifierSignature();
     }
 
     function _canonicalizeUsername(string memory value) internal pure returns (string memory) {
         bytes memory raw = bytes(value);
         uint256 start = 0;
-
         while (start < raw.length && raw[start] == 0x40) {
-            unchecked {
-                ++start;
-            }
+            unchecked { ++start; }
         }
-
         bytes memory normalized = new bytes(raw.length - start);
         for (uint256 i = start; i < raw.length; ++i) {
             bytes1 char_ = raw[i];
@@ -582,59 +437,53 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
             }
             normalized[i - start] = char_;
         }
-
         return string(normalized);
     }
 
     // ===================== 查询函数 =====================
 
-    /// @notice 获取当前阶段的剩余时间（秒）
-    function timeRemaining(uint256 dealIndex) external view returns (uint256) {
-        Deal storage d = deals[dealIndex];
-        uint256 deadline_;
-        if (d.status == VERIFYING && d.verificationTimestamp > 0) {
-            deadline_ = uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT;
-        } else if (d.status == SETTLING) {
-            deadline_ = uint256(d.stageTimestamp) + SETTLING_TIMEOUT;
-        } else {
-            deadline_ = uint256(d.stageTimestamp) + STAGE_TIMEOUT;
-        }
-        if (block.timestamp >= deadline_) return 0;
-        return deadline_ - block.timestamp;
+    /// @notice 每次 claim 的总成本
+    function claimCost() external view returns (uint96) {
+        return _claimCost();
     }
 
-    /// @notice 检查验证是否已超时
-    function isVerificationTimedOut(uint256 dealIndex) external view returns (bool) {
-        Deal storage d = deals[dealIndex];
-        if (d.status != VERIFYING) return false;
-        return block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT;
+    /// @notice 剩余可 claim 次数
+    function remainingSlots() external view returns (uint256) {
+        uint96 cost = _claimCost();
+        if (cost == 0) return 0;
+        return uint256(budget) / uint256(cost);
     }
 
-    /// @notice 获取协商提案信息
-    function settlement(uint256 dealIndex) external view returns (
-        address proposer,
-        uint96  amountToA,
-        uint96  amountToB
-    ) {
-        Settlement storage stl = settlements[dealIndex];
-        if (stl.proposer == address(0)) return (address(0), 0, 0);
-        uint96 total = deals[dealIndex].amount;
-        return (stl.proposer, stl.amountToA, total - stl.amountToA);
+    /// @notice 指定地址是否可 claim
+    function canClaim(address addr) external view returns (bool) {
+        if (campaignStatus != OPEN) return false;
+        if (block.timestamp > deadline) return false;
+        if (budget < _claimCost()) return false;
+        if (claimed[addr]) return false;
+        if (failCount[addr] >= MAX_FAILURES) return false;
+        if (_hasPendingClaim(addr)) return false;
+        // 检查 TwitterRegistry（staticcall 不 revert）
+        (bool success, bytes memory data) = TWITTER_REGISTRY.staticcall(
+            abi.encodeWithSignature("usernameOf(address)", addr)
+        );
+        if (!success) return false;
+        string memory username = abi.decode(data, (string));
+        return bytes(username).length > 0;
     }
 
-    /// @notice 检查交易阶段是否已超时
-    function isTimedOut(uint256 dealIndex) external view returns (bool) {
-        return _isStageTimedOut(dealIndex);
+    /// @notice 地址的失败次数
+    function failures(address addr) external view returns (uint8) {
+        return failCount[addr];
     }
 
-    // ===================== 标准身份标识 =====================
+    // ===================== IDeal 实现 =====================
 
     function name() external pure override returns (string memory) {
         return "X Follow Deal";
     }
 
     function description() external pure override returns (string memory) {
-        return "Pay USDC to get a user to follow an account on X. 2-party (payer + follower). On-chain verifier with dual-provider check (twitterapi.io + twitter-api45) or manual confirm. 30min stage timeout, settlement on dispute.";
+        return "Campaign: pay fixed USDC reward per X follow. 1-to-many, auto-verified via twitterapi.io + twitter-api45. TwitterRegistry identity required.";
     }
 
     function tags() external pure override returns (string[] memory) {
@@ -645,22 +494,16 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function version() external pure override returns (string memory) {
-        return "1.0";
-    }
-
-    function protocolFee() external view returns (uint96) {
-        return PROTOCOL_FEE;
+        return "2.0";
     }
 
     function protocolFeePolicy() external pure override returns (string memory) {
         return
-            "Fixed protocol fee per deal. "
-            "A pays grossAmount = reward + protocolFee on createDeal. "
-            "Fee is sent to FeeCollector when B calls accept; fully refunded if cancelled before accept. "
-            "Query exact value via protocolFee().";
+            "Per-claim protocol fee deducted from campaign budget. "
+            "claimCost = rewardPerFollow + verifierFee + protocolFee. "
+            "No upfront fee at campaign creation. "
+            "Query exact value via claimCost().";
     }
-
-    // ===================== 验证查询 =====================
 
     function requiredSpecs() external view override returns (address[] memory) {
         address[] memory specs = new address[](1);
@@ -669,152 +512,67 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function verificationParams(uint256 dealIndex, uint256 verificationIndex)
-        external view override
-        onlySlot0(verificationIndex)
-        returns (
-            address verifier,
-            uint256 fee,
-            uint256 deadline,
-            bytes memory sig,
-            bytes memory specParams
-        )
+        external view override onlySlot0(verificationIndex)
+        returns (address, uint256, uint256, bytes memory, bytes memory)
     {
-        Deal storage d = deals[dealIndex];
-        if (d.partyA == address(0)) revert InvalidParams();
+        Claim storage c = claims[dealIndex];
+        if (c.claimer == address(0)) revert InvalidParams();
 
-        specParams = abi.encode(d.follower_username, d.target_username);
-
-        return (d.verifier, uint256(d.verifierFee), d.signatureDeadline, d.verifierSignature, specParams);
+        bytes memory specParams = abi.encode(c.follower_username, target_username);
+        return (verifier, uint256(verifierFee), signatureDeadline, verifierSignature, specParams);
     }
 
-    // ===================== 操作指南 =====================
-
-    function instruction() external view override returns (string memory) {
-        return
-            "# X Follow Deal\n\n"
-            "Pay USDC to get a user to follow an account on X. 2-party (payer + follower). "
-            "On-chain verifier with dual-provider check (twitterapi.io + twitter-api45) or manual confirm. "
-            "30min stage timeout, settlement on dispute.\n\n"
-            "- **A (Initiator)**: Specifies a target account + deposits USDC reward\n"
-            "- **B (Executor)**: Follows the target account on X\n"
-            "- After A manually confirms or verifier auto-verifies, B receives the reward\n\n"
-            "| Item | Value |\n"
-            "|----|----|\n"
-            "| Token | USDC (decimals=6), address via `feeToken()` |\n"
-            "| Amount | Raw value x10^6, e.g. 1.5 USDC = `1500000` |\n\n"
-            "## Price Negotiation\n\n"
-            "Before creating a deal, A and B negotiate B's reward (net amount):\n\n"
-            "- **A (Offer)**: Evaluate based on B's follower count, influence, etc.\n"
-            "- **B (Evaluate)**: Judge whether the offer is fair; counter-offer if not.\n"
-            "- Either party may walk away if the price is unacceptable.\n\n"
-            "## createDeal Parameters\n\n"
-            "| Parameter | Type | Description |\n"
-            "|------|------|------|\n"
-            "| partyB | address | Executor (follower) address |\n"
-            "| grossAmount | uint96 | Negotiated reward + protocol fee (USDC raw value). Call `protocolFee()` to get the fee, then grossAmount = reward + fee |\n"
-            "| verifier | address | Verifier contract address |\n"
-            "| verifierFee | uint96 | Verification fee (USDC raw value) |\n"
-            "| deadline | uint256 | Verifier signature validity (Unix seconds) |\n"
-            "| sig | bytes | Verifier EIP-712 signature |\n"
-            "| follower_username | string | B's X username. Leading @ and mixed case are accepted; the contract strips leading @ and lowercases internally |\n"
-            "| target_username | string | Target account to follow. Same normalization rules apply |\n\n"
-            "**Prerequisites**:\n"
-            "1. Confirm B is not already following the target account, otherwise the deal is meaningless\n"
-            "2. Both parties have agreed on B's reward, follower_username, target_username. A calls `protocolFee()` to get the protocol fee, grossAmount = reward + protocol fee\n"
-            "3. USDC `approve(contract address, reward + protocol fee + verification fee)`, i.e., grossAmount + verifierFee\n"
-            "4. Obtain verifier signature via `request_sign` (sig + fee)\n\n"
-            "> On creation, `grossAmount` is transferred to the contract in full; the protocol fee is only sent to `FeeCollector` after B calls `accept`. If B does not accept and the deal is cancelled, both protocol fee and reward are refunded to A.\n\n"
-            "## dealStatus Action Guide\n\n"
-            "`dealStatus(dealIndex)` returns the current status (unified, same for all callers). Refer to the table below for actions:\n\n"
-            "| Code | Status | A's Action | B's Action |\n"
-            "|----|------|------|------|\n"
-            "| 0 | WaitingAccept | Wait for B | `accept(dealIndex)` |\n"
-            "| 1 | AcceptTimedOut | `cancelDeal(dealIndex)` | -- |\n"
-            "| 2 | WaitingClaim | Wait for B | Follow target, then `claimDone(dealIndex)` |\n"
-            "| 3 | ClaimTimedOut | `triggerTimeout(dealIndex)` | -- |\n"
-            "| 4 | WaitingConfirm | `confirmAndPay(dealIndex)` or `requestVerification(dealIndex, 0)` | Wait for A |\n"
-            "| 5 | ConfirmTimedOut | -- | `triggerTimeout(dealIndex)` |\n"
-            "| 6 | Verifying | Wait | Wait |\n"
-            "| 7 | VerifierTimedOut | `resetVerification(dealIndex, 0)` | `resetVerification(dealIndex, 0)` |\n"
-            "| 8 | Settling | `proposeSettlement(dealIndex, amountToA)` | `proposeSettlement(dealIndex, amountToA)` |\n"
-            "| 9 | SettlementProposed | `confirmSettlement(dealIndex)` or counter-propose | `confirmSettlement(dealIndex)` or counter-propose |\n"
-            "| 10 | SettlementTimedOut | `confirmSettlement(dealIndex)` or `triggerSettlementTimeout(dealIndex)` | `confirmSettlement(dealIndex)` or `triggerSettlementTimeout(dealIndex)` |\n"
-            "| 11 | Completed | -- | -- |\n"
-            "| 12 | Violated | Non-violator: `withdraw(dealIndex)` | Non-violator: `withdraw(dealIndex)` |\n"
-            "| 13 | Cancelled | -- | -- |\n"
-            "| 14 | Forfeited | -- (funds seized to protocol) | -- (funds seized to protocol) |\n"
-            "| 255 | NotFound | Deal does not exist | Deal does not exist |\n\n"
-            "> **Timeouts**: 30 minutes per stage (Settling: 12 hours). Use `timeRemaining(dealIndex)` to query remaining seconds.\n\n"
-            "> **Settlement timeout (code 10)**: After 12 hours, new proposals are blocked. Pending proposals can still be confirmed. Either party can call `triggerSettlementTimeout` to forfeit all funds to the protocol (Forfeited).\n\n"
-            "> **Verification flow (code 4)**:\n"
-            "> 1. `requestVerification(dealIndex, 0)`\n"
-            "> 2. **Must** call `notify_verifier(verifier_address, dealContract, dealIndex, verificationIndex)` to notify the verifier\n"
-            "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
-            "> **Verification details**: The verifier checks follow status via dual providers:\n"
-            "> - twitterapi.io: `check_follow_relationship` API\n"
-            "> - twitter-api45 (RapidAPI): `checkfollow.php` API\n"
-            "> - Result: ANY provider confirms follow = pass; BOTH deny = fail; BOTH error = uncertain (settlement)\n\n"
-            "> **Settlement semantics (code 8/9)**: In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B.\n\n"
-            "## Gasless Transactions\n\n"
-            "If `trustedForwarder()` returns a non-zero address, all write operations can be executed gaslessly via the relayer. "
-            "Use `relay` instead of `invoke` in the wallet skill -- the CLI handles EIP-712 signing and submission automatically.\n";
+    /// @notice claim() 内部自动触发验证，外部调用始终 revert
+    function requestVerification(uint256, uint256) external pure override {
+        revert("use claim() instead");
     }
 
-    // ===================== 状态查询 =====================
-
-    /// @notice 平台级统一交易阶段
-    /// @dev 0=NotFound, 1=Pending, 2=Active, 3=Success, 4=Failed, 5=Cancelled
+    /// @notice 平台级统一交易阶段（per-claim）
     function phase(uint256 dealIndex) external view override returns (uint8) {
-        Deal storage d = deals[dealIndex];
-        if (d.partyA == address(0)) return 0; // NotFound
-
-        uint8 s = d.status;
-        if (s == WAITING_ACCEPT) return 1;   // Pending
-        if (s == COMPLETED) return 3;         // Success
-        if (s == VIOLATED) return 4;          // Failed
-        if (s == FORFEITED) return 4;         // Failed
-        if (s == CANCELLED) return 5;         // Cancelled
-        return 2; // Active（WAITING_CLAIM, WAITING_CONFIRM, VERIFYING, SETTLING）
+        Claim storage c = claims[dealIndex];
+        if (c.claimer == address(0)) return 0; // NotFound
+        if (c.status == VERIFYING) return 2;   // Active
+        if (c.status == COMPLETED) return 3;   // Success
+        return 4;                               // Failed
     }
 
-    /// @notice 统一业务状态码 — 不依赖 msg.sender，任何人调用结果一致
+    /// @notice 业务级状态码（per-claim，含派生状态）
     function dealStatus(uint256 dealIndex) external view override returns (uint8) {
-        Deal storage d = deals[dealIndex];
-        if (d.partyA == address(0)) return NOT_FOUND;
+        Claim storage c = claims[dealIndex];
+        if (c.claimer == address(0)) return NOT_FOUND;
 
-        uint8 s = d.status;
-
-        if (s == WAITING_ACCEPT) {
-            return _isStageTimedOut(dealIndex) ? ACCEPT_TIMED_OUT : WAITING_ACCEPT;
-        }
-
-        if (s == WAITING_CLAIM) {
-            return _isStageTimedOut(dealIndex) ? CLAIM_TIMED_OUT : WAITING_CLAIM;
-        }
-
-        if (s == WAITING_CONFIRM) {
-            return _isStageTimedOut(dealIndex) ? CONFIRM_TIMED_OUT : WAITING_CONFIRM;
-        }
-
-        if (s == VERIFYING) {
-            if (block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) {
+        if (c.status == VERIFYING) {
+            if (block.timestamp > uint256(c.timestamp) + VERIFICATION_TIMEOUT) {
                 return VERIFIER_TIMED_OUT;
             }
             return VERIFYING;
         }
-
-        if (s == SETTLING) {
-            if (_isStageTimedOut(dealIndex)) return SETTLEMENT_TIMED_OUT;
-            if (settlements[dealIndex].proposer != address(0)) return SETTLEMENT_PROPOSED;
-            return SETTLING;
-        }
-
-        // 终态：COMPLETED (11), VIOLATED (12), CANCELLED (13), FORFEITED (14)
-        return s;
+        return c.status;
     }
 
-    /// @notice 指定索引的交易是否存在
     function dealExists(uint256 dealIndex) external view override returns (bool) {
-        return deals[dealIndex].partyA != address(0);
+        return claims[dealIndex].claimer != address(0);
+    }
+
+    function instruction() external view override returns (string memory) {
+        return
+            "# X Follow Deal (Campaign)\n\n"
+            "Pay fixed USDC reward per follow to a target account on X. 1-to-many campaign model.\n\n"
+            "## Campaign Lifecycle\n\n"
+            "TESTING -> OPEN -> CLOSED\n\n"
+            "- **TESTING**: A can modify params (updateParams), add/remove budget. Call activate() to go live.\n"
+            "- **OPEN**: Params locked, anyone with TwitterRegistry binding can claim().\n"
+            "- **CLOSED**: Auto-triggered on deadline or budget exhaustion. A calls withdrawRemaining().\n\n"
+            "## For Followers (B)\n\n"
+            "1. Bind your Twitter via TwitterRegistry (if not already)\n"
+            "2. Follow the target account on X\n"
+            "3. Call `claim()` (no parameters needed)\n"
+            "4. Wait for verification result\n\n"
+            "## Costs\n\n"
+            "B pays nothing. All fees (reward + verifierFee + protocolFee) come from A's budget.\n"
+            "Query `claimCost()` for per-claim cost, `remainingSlots()` for available claims.\n\n"
+            "## Failure Policy\n\n"
+            "Failed claims (not following) increment failCount. After 3 failures, banned from this campaign.\n"
+            "Inconclusive results (API errors) do not count as failures.\n";
     }
 }

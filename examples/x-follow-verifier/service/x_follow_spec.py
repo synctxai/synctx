@@ -1,7 +1,7 @@
 """XFollow Spec adapter module — centralized management of XFollow EIP-712 type definitions and specParams encoding/decoding.
 
-chain.py only handles generic on-chain calls (returns raw bytes).
-This module decodes specParams per XFollowVerifierSpec's definition and provides the typed-data structure needed for signing.
+Campaign model: signature is per-campaign (target_username only, no follower_username).
+specParams is per-claim (follower_username + target_username).
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from config import settings
 
 # ---------------------------------------------------------------------------
 # Complete EIP-712 type definitions (consistent with XFollowVerifierSpec.VERIFY_TYPEHASH)
-# TypeHash: keccak256("Verify(string followerUsername,string targetUsername,uint256 fee,uint256 deadline)")
+# TypeHash: keccak256("Verify(string targetUsername,uint256 fee,uint256 deadline)")
 # ---------------------------------------------------------------------------
 
 EIP712_FULL_TYPES = {
@@ -27,7 +27,6 @@ EIP712_FULL_TYPES = {
         {"name": "verifyingContract", "type": "address"},
     ],
     "Verify": [
-        {"name": "followerUsername", "type": "string"},
         {"name": "targetUsername", "type": "string"},
         {"name": "fee", "type": "uint256"},
         {"name": "deadline", "type": "uint256"},
@@ -42,7 +41,7 @@ DOMAIN = {
 }
 
 # ---------------------------------------------------------------------------
-# specParams encoding/decoding
+# specParams encoding/decoding (per-claim)
 # specParams = abi.encode(string follower_username, string target_username)
 # ---------------------------------------------------------------------------
 
