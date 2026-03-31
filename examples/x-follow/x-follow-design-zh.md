@@ -1,6 +1,6 @@
 # XFollowDealContract 设计文档
 
-> 1对多 campaign 模型：A 存入预算，任何已认证 TwitterRegistry 的用户均可关注后领取固定奖励。全自动，无需协商。
+> 合约即 campaign。A 部署并存入预算，任何已认证 TwitterRegistry 的用户均可关注后领取固定奖励。每个 claim 就是一个 dealIndex。全自动，无需协商。
 
 ---
 
@@ -9,105 +9,111 @@
 XFollowDealContract 是一个具体的 DealContract 实现，用于 **"A 为关注 X 上指定账号支付固定奖励"** 的 campaign 场景。
 
 - **继承链：** `IDeal → DealBase → XFollowDealContract`
-- **模型：** 1对多 — A 创建 campaign，任意数量的 B 可领取
-- **验证系统：** 多 claim 单 verifier（每个 campaign），要求 `XFollowVerifierSpec`
+- **模型：** 一个合约 = 一个 campaign。每个 B 的 `claim()` 创建一个新的 dealIndex
+- **验证系统：** 单 verifier（每个 campaign），要求 `XFollowVerifierSpec`
 - **支付代币：** USDC
 - **标签：** `["x", "follow"]`
 - **身份：** `TwitterRegistry` 绑定为强制要求 — 合约在链上读取 `usernameOf[msg.sender]`，未绑定则 revert
-- **验证语义：** 验证者检查验证时刻关注关系是否存在。身份由 TwitterRegistry 保证（钱包 ↔ 用户名），消除冒领风险
-- **链下验证：** 双源并行检查：twitterapi.io（`check_follow_relationship`）+ twitter-api45（`checkfollow.php`）
+- **验证语义：** 验证者检查验证时刻关注关系是否存在。身份由 TwitterRegistry 保证（钱包 ↔ 用户名）
+- **链下验证：** 双源并行检查：twitterapi.io + twitter-api45
 - **结束条件：** 预算耗尽或截止时间到达 — A 不可提前关闭
-- **deadline 约束：** verifier 签名 deadline 必须 ≥ campaign deadline（`sigDeadline >= campaignDeadline`），确保 verifier 承诺覆盖整个 campaign 周期。在 `createDeal` 时检查
+- **deadline 约束：** `sigDeadline >= campaignDeadline`
 - **协议费：** 按 claim 收取，每次 claim 从预算中扣除（不在创建时预收）
-- **失败限制：** `MAX_FAILURES = 3` — B 在一个 campaign 中失败 3 次后被封禁。失败后可重试直到达到上限
+- **失败限制：** `MAX_FAILURES = 3` — B 在此合约中失败 3 次后被封禁
 
 ---
 
 ## 2. 核心数据结构
 
-### 2.1 Deal（Campaign）
+### 2.1 合约级存储（Campaign）
 
 ```solidity
-struct Deal {
-    // 槽 1
-    address partyA;              // 20 字节 — campaign 创建者
-    uint48  deadline;            // 6 字节  — campaign 截止时间（Unix 秒）
-    uint8   status;              // 1 字节  — OPEN / CLOSED
-    // 槽 2
-    address verifier;            // 20 字节 — verifier 合约地址
-    uint96  rewardPerFollow;     // 12 字节 — 每次关注的固定 USDC 奖励
-    // 槽 3
-    uint96  budget;              // 12 字节 — 剩余未锁定 USDC 预算
-    uint96  verifierFee;         // 12 字节 — 每次验证的费用（从预算扣除）
-    uint32  pendingClaims;       // 4 字节  — 等待验证的 claim 数
-    uint32  completedClaims;     // 4 字节  — 已成功验证的 claim 数
-    // 槽 4
-    uint256 signatureDeadline;   // verifier 签名到期时间（必须 >= deadline）
-    // 动态类型
-    string  target_username;     // 规范化：无 @，全小写
-    bytes   verifierSignature;   // EIP-712 签名
-}
+// ===================== 不可变量 =====================
+
+address public immutable FEE_COLLECTOR;
+uint96  public immutable PROTOCOL_FEE;
+address public immutable REQUIRED_SPEC;
+address public immutable TWITTER_REGISTRY;
+
+// ===================== Campaign 状态 =====================
+
+address public partyA;               // campaign 创建者
+address public verifier;             // verifier 合约地址
+uint96  public rewardPerFollow;      // 每次关注的固定 USDC 奖励
+uint96  public verifierFee;          // 每次验证的费用（从预算扣除）
+uint48  public deadline;             // campaign 截止时间（Unix 秒）
+uint96  public budget;               // 剩余未锁定 USDC 预算
+uint32  public pendingClaims;        // 等待验证的 claim 数
+uint32  public completedClaims;      // 已成功验证的 claim 数
+uint256 public signatureDeadline;    // verifier 签名到期时间（必须 >= deadline）
+string  public target_username;      // 规范化：无 @，全小写
+bytes   public verifierSignature;    // EIP-712 签名
+bool    public closed;               // A 提取剩余后为 true
 ```
 
-### 2.2 Claim
+### 2.2 Per-Claim 存储（每个 claim = 一个 dealIndex）
 
 ```solidity
 struct Claim {
-    // 槽 1
-    address claimer;             // 20 字节 — B 的地址
-    uint48  timestamp;           // 6 字节  — claim 创建时间
-    uint8   status;              // 1 字节  — VERIFYING / COMPLETED / REJECTED
-    // 动态类型
-    string  follower_username;   // claim 时从 TwitterRegistry 读取（B 无需提供任何输入）
+    address claimer;             // B 的地址
+    uint48  timestamp;           // claim 创建时间
+    uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT
+    string  follower_username;   // claim 时从 TwitterRegistry 读取
 }
-```
 
-### 2.3 Mappings
-
-```solidity
-mapping(uint256 => Deal) deals;
-mapping(uint256 => mapping(uint256 => Claim)) claims;
-mapping(uint256 => mapping(address => bool)) claimed;      // 成功领取后为 true（B 已收款）
-mapping(uint256 => mapping(address => uint8)) failCount;   // 失败次数；≥ MAX_FAILURES → 封禁
-mapping(uint256 => uint256) nextClaimIndex;
+mapping(uint256 => Claim) internal claims;
+mapping(address => bool)  public claimed;      // 成功领取后为 true
+mapping(address => uint8) public failCount;    // 失败次数；>= MAX_FAILURES → 封禁
 ```
 
 ---
 
 ## 3. 函数参考
 
-### 3.1 XFollowDealContract 函数
+### 3.1 Campaign 设置
 
 | 方法 | 参数 | 调用者 | 说明 |
 |------|------|--------|------|
-| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A | 创建 campaign。`grossAmount` 全额存入作为 budget（无预收 protocolFee）。要求 `sigDeadline >= deadline` 且 `budget >= claimCost()` |
-| `claim(dealIndex)` | `uint256 dealIndex` | 任何 B | B 只传 `dealIndex`。合约读取 `TwitterRegistry.usernameOf[msg.sender]` — 未绑定则 revert `NotVerified`。已成功领取则 revert `AlreadyClaimed`，失败 ≥ 3 次则 revert `MaxFailures`。从预算锁定 `claimCost()`。发出 VerificationRequested |
-| `onVerificationResult(...)` | `uint256 dealIndex, uint256 claimIndex, int8 result, string reason` | Verifier | result>0 → 付款给 B，设 claimed[B]=true；result<0 → 奖励退回预算，failCount[B]++；result==0 → 全部退回预算。通过/失败时 verifier + FeeCollector 照付 |
-| `withdrawRemaining(dealIndex)` | `uint256 dealIndex` | A | deadline 到期 + pendingClaims==0 后，A 提取剩余预算。Deal → CLOSED |
-| `resetClaim(dealIndex, claimIndex)` | `uint256 dealIndex, uint256 claimIndex` | 任何人 | VERIFICATION_TIMEOUT 后，重置超时 claim。全额 claimCost 退回预算 |
+| `constructor(...)` | `address feeCollector, uint96 protocolFee, address requiredSpec, address twitterRegistry` | 部署 | 设置不可变量 |
+| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A（仅一次） | 初始化 campaign。`grossAmount` 全额存入作为 budget。要求 `sigDeadline >= deadline` 且 `budget >= claimCost()`。仅可调用一次 |
 
-### 3.2 查询函数
+### 3.2 Claim 操作（每个 claim = 一个 dealIndex）
+
+| 方法 | 参数 | 调用者 | 说明 |
+|------|------|--------|------|
+| `claim()` | — | 任何 B | B 无需传参。读取 `TwitterRegistry.usernameOf[msg.sender]`。未绑定则 revert，已成功则 revert，失败 ≥ 3 次则 revert。从预算锁定 `claimCost()`。返回 `dealIndex`。发出 VerificationRequested |
+| `onVerificationResult(...)` | `uint256 dealIndex, uint256 verificationIndex, int8 result, string reason` | Verifier | result>0 → 付款给 B，claimed[B]=true，completedClaims++；result<0 → 奖励退回预算，failCount[B]++；result==0 → 全部退回预算 |
+| `resetVerification(...)` | `uint256 dealIndex, uint256 verificationIndex` | 任何人 | VERIFICATION_TIMEOUT 后重置超时 claim。全额 claimCost 退回预算 |
+
+### 3.3 Campaign 结束
+
+| 方法 | 参数 | 调用者 | 说明 |
+|------|------|--------|------|
+| `withdrawRemaining()` | — | A | deadline 到期 + pendingClaims==0 后，A 提取剩余预算。closed=true |
+
+### 3.4 查询函数
 
 | 方法 | 返回值 | 说明 |
 |------|--------|------|
-| `claimCost()` | `uint96` | `rewardPerFollow + verifierFee + PROTOCOL_FEE` — 每次 claim 从预算扣除的总成本 |
-| `dealStatus(dealIndex)` | `uint8` | 派生状态：OPEN / EXHAUSTED / EXPIRED / CLOSED / NOT_FOUND |
-| `dealInfo(dealIndex)` | `(address partyA, string target, uint96 reward, uint96 budget, uint48 deadline, uint32 completed, uint32 pending)` | Campaign 详情 |
-| `claimInfo(dealIndex, claimIndex)` | `(address claimer, string username, uint8 status)` | 单个 claim 详情 |
-| `canClaim(dealIndex, addr)` | `bool` | addr 是否可 claim（有 TwitterRegistry 绑定、未成功领取、failCount < 3、预算 ≥ claimCost、未过期） |
-| `failures(dealIndex, addr)` | `uint8` | 该地址在此 campaign 中的失败次数 |
+| `claimCost()` | `uint96` | `rewardPerFollow + verifierFee + PROTOCOL_FEE` |
+| `campaignStatus()` | `uint8` | OPEN / EXHAUSTED / EXPIRED / CLOSED |
+| `dealStatus(dealIndex)` | `uint8` | Per-claim 状态：VERIFYING / COMPLETED / REJECTED / TIMED_OUT / NOT_FOUND |
+| `canClaim(addr)` | `bool` | addr 是否可 claim |
+| `failures(addr)` | `uint8` | addr 的失败次数 |
+| `remainingSlots()` | `uint256` | `budget / claimCost()` |
 
-### 3.3 继承自 DealBase / IDeal
+### 3.5 继承自 DealBase / IDeal
 
 | 方法 | 说明 |
 |------|------|
-| `name()` | 返回 `"X Follow Deal"` |
+| `name()` | `"X Follow Deal"` |
 | `description()` | Campaign 描述 |
 | `tags()` | `["x", "follow"]` |
 | `version()` | `"2.0"` |
 | `instruction()` | Markdown 操作指南 |
 | `requiredSpecs()` | `[XFollowVerifierSpec]` |
-| `verificationParams(dealIndex, claimIndex)` | 返回指定 claim 的 verifier + specParams |
+| `verificationParams(dealIndex, 0)` | 返回指定 claim 的 verifier + specParams |
+| `phase(dealIndex)` | 0=不存在，1=待处理(不使用)，2=活跃(VERIFYING)，3=成功，4=失败 |
 
 ---
 
@@ -128,14 +134,14 @@ TYPEHASH：
 Verify(string targetUsername,uint256 fee,uint256 deadline)
 ```
 
-Verifier 每个 campaign 签名一次。签名中的 `deadline` 是 verifier 自身的承诺到期时间。`createDeal` 时合约检查 `sigDeadline >= campaignDeadline` — 确保 verifier 的承诺覆盖整个 campaign 周期。
+Verifier 每个 campaign 签名一次。`createDeal` 时检查 `sigDeadline >= campaignDeadline`。
 
 ### 4.3 specParams（per-claim）
 
 ```solidity
 specParams = abi.encode(
     string follower_username,  // claim 时从 TwitterRegistry.usernameOf[claimer] 读取
-    string target_username     // campaign 目标账号（来自 deal）
+    string target_username     // campaign 目标账号
 )
 ```
 
@@ -144,10 +150,10 @@ B 不提供任何用户名 — 合约在链上从 TwitterRegistry 读取。
 ### 4.4 链下验证流程
 
 ```
-Verifier 服务收到 notify_verify（claimIndex 作为 verificationIndex）
+Verifier 服务收到 notify_verify（dealIndex = claim，verificationIndex = 0）
   │
-  ├── 0. 读取链上 claim 状态 — 仅在 VERIFYING 时继续
-  ├── 1. 读取 verificationParams(dealIndex, claimIndex) → 解码 specParams
+  ├── 0. 读取链上 dealStatus(dealIndex) — 仅在 VERIFYING 时继续
+  ├── 1. 读取 verificationParams(dealIndex, 0) → 解码 specParams
   ├── 2. 并行 API 调用：
   │     ├── twitterapi.io: check_follow_relationship
   │     └── twitter-api45: checkfollow.php
@@ -155,7 +161,7 @@ Verifier 服务收到 notify_verify（claimIndex 作为 verificationIndex）
   │     ├── 任一确认关注 → result = 1（通过）
   │     ├── 两者均否定 → 5 秒后重试 → result = -1 或 1
   │     └── 两者均出错 → result = 0（不确定）
-  └── 4. reportResult(dealContract, dealIndex, claimIndex, result, reason, expectedFee)
+  └── 4. reportResult(contract, dealIndex, 0, result, reason, expectedFee)
 ```
 
 ---
@@ -167,98 +173,100 @@ sequenceDiagram
     participant A as Campaign 创建者 (A)
     participant P as SyncTx (MCP)
     participant B as 关注者 (B)
-    participant D as DealContract
+    participant C as Contract（= Campaign）
     participant V as Verifier
     participant R as TwitterRegistry
     participant F as FeeCollector
 
-    Note over A,V: 设置阶段（每个 campaign 一次）
+    Note over A,V: 部署与设置（一次）
 
     A->>P: 🟣 request_sign(verifier_address, {target_username}, deadline)
     P-->>V: 异步消息
     V->>P: 回复 {accepted, fee, sig}
     P-->>A: 异步消息
 
-    Note over A: 🟢 USDC.approve(DealContract, grossAmount)
-    A->>D: 🟢 createDeal(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
-    Note over D: grossAmount → budget（无预收 protocolFee）<br/>🔵 DealCreated · DealStateChanged(OPEN)
+    Note over A: 部署 XFollowDealContract(feeCollector, protocolFee, spec, registry)
+    Note over A: 🟢 USDC.approve(contract, grossAmount)
+    A->>C: 🟢 createDeal(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
+    Note over C: grossAmount → budget<br/>Campaign 状态：OPEN
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
-    Note over B,D: 领取阶段（可重复，B 零输入）
+    Note over B,C: 领取阶段（每个 claim = 一个 dealIndex）
 
-    Note over B: 1. 通过 TwitterRegistry 绑定 Twitter（如尚未绑定）
+    Note over B: 1. 通过 TwitterRegistry 绑定 Twitter
     Note over B: 2. 在 X 上关注 target_username
-    B->>D: 🟡 canClaim(dealIndex, B.address) → true
-    B->>D: 🟢 claim(dealIndex)
-    Note over D: 读取 R.usernameOf[B] → 未绑定则 revert<br/>从预算锁定 claimCost（reward + verifierFee + protocolFee）<br/>🔵 VerificationRequested(dealIndex, claimIndex, verifier)
-    B->>P: 🟣 report_transaction + notify_verifier
+    B->>C: 🟡 canClaim(B.address) → true
+    B->>C: 🟢 claim() → dealIndex
+    Note over C: 读取 R.usernameOf[B] → 未绑定则 revert<br/>从预算锁定 claimCost<br/>🔵 DealCreated(dealIndex, [B], [verifier])<br/>🔵 VerificationRequested(dealIndex, 0, verifier)
+    B->>P: 🟣 report_transaction + notify_verifier(verifier, contract, dealIndex, 0)
     P-->>V: 异步消息
 
-    V->>D: 🟡 verificationParams(dealIndex, claimIndex)
+    V->>C: 🟡 verificationParams(dealIndex, 0)
     Note over V: 双源关注检查
 
-    V->>D: 🟢 reportResult(dealContract, dealIndex, claimIndex, result, reason, expectedFee)
+    V->>C: 🟢 reportResult(contract, dealIndex, 0, result, reason, expectedFee)
 
     alt result > 0 — 已确认关注
-        Note over D: reward → B<br/>verifierFee → verifier<br/>protocolFee → FeeCollector<br/>completedClaims++
+        Note over C: reward → B，verifierFee → V，protocolFee → F<br/>claimed[B]=true，completedClaims++<br/>🔵 DealPhaseChanged(dealIndex, 3)
     else result < 0 — 未关注
-        Note over D: reward → 预算<br/>verifierFee → verifier<br/>protocolFee → FeeCollector<br/>failCount[B]++
+        Note over C: reward → budget，verifierFee → V，protocolFee → F<br/>failCount[B]++<br/>🔵 DealPhaseChanged(dealIndex, 4)
     else result == 0 — 不确定
-        Note over D: reward + verifierFee + protocolFee → 预算
+        Note over C: claimCost → budget<br/>🔵 DealPhaseChanged(dealIndex, 4)
     end
 
-    Note over A,D: 提取阶段（deadline 到期后）
+    Note over A,C: 提取阶段（deadline 到期后）
 
-    A->>D: 🟢 withdrawRemaining(dealIndex)
-    Note over D: 剩余预算 → A<br/>Deal → CLOSED
+    A->>C: 🟢 withdrawRemaining()
+    Note over C: budget → A，closed = true
 ```
 
 ---
 
 ## 6. 状态机与转换
 
-### 6.1 Deal 状态
+### 6.1 Campaign 状态（`campaignStatus()`）
 
 | 代码 | 状态 | 含义 |
 |------|------|------|
 | 0 | OPEN | 接受 claim（预算 ≥ claimCost，未过期） |
 | 1 | EXHAUSTED | 预算 < claimCost（claim 被拒后可能恢复） |
-| 2 | EXPIRED | 已过 deadline，待处理 claim 仍可解决，A 暂不可提取 |
-| 3 | CLOSED | A 已提取剩余预算，所有 claim 已解决 |
-| 255 | NOT_FOUND | 交易不存在 |
+| 2 | EXPIRED | 已过 deadline，待处理 claim 仍可解决 |
+| 3 | CLOSED | A 已提取剩余预算 |
 
-> EXHAUSTED 和 EXPIRED 在运行时派生（不存储）。存储状态仅有 OPEN 和 CLOSED。
-> `claimCost = rewardPerFollow + verifierFee + PROTOCOL_FEE`
+> EXHAUSTED 和 EXPIRED 在运行时派生。存储标志仅有 `closed`。
 
-### 6.2 Claim 状态
+### 6.2 Per-Claim 状态（`dealStatus(dealIndex)`）
 
 | 代码 | 状态 | 含义 |
 |------|------|------|
 | 0 | VERIFYING | 等待 verifier 响应 |
 | 1 | COMPLETED | 关注已验证，B 已收款 |
-| 2 | REJECTED | 未检测到关注，奖励退回预算，记录一次失败 |
-| 3 | TIMED_OUT | Verifier 超时，全额 claimCost 退回预算 |
+| 2 | REJECTED | 未检测到关注或不确定，奖励已退回 |
+| 3 | TIMED_OUT | Verifier 超时，全额 claimCost 退回 |
+| 255 | NOT_FOUND | Claim 不存在 |
 
 ### 6.3 状态转换图
 
 ```mermaid
 flowchart TD
-    OPEN["0 OPEN<br/>接受 claim"]
-    EXHAUSTED["1 EXHAUSTED<br/>预算 < claimCost<br/>（拒绝后可恢复）"]
-    EXPIRED["2 EXPIRED<br/>已过 deadline<br/>待处理 claim 解决中"]
-    CLOSED["3 CLOSED ✅<br/>A 已提取剩余"]
+    subgraph "Campaign 生命周期"
+        OPEN["OPEN<br/>接受 claim"]
+        EXHAUSTED["EXHAUSTED<br/>预算 < claimCost<br/>（可恢复）"]
+        EXPIRED["EXPIRED<br/>已过 deadline"]
+        CLOSED["CLOSED ✅<br/>A 已提取"]
 
-    OPEN -->|"预算 < claimCost"| EXHAUSTED
-    OPEN -->|"block.timestamp > deadline"| EXPIRED
-    EXHAUSTED -->|"claim 被拒 → 预算恢复"| OPEN
-    EXHAUSTED -->|"block.timestamp > deadline"| EXPIRED
-    EXPIRED -->|"A: withdrawRemaining()<br/>(pendingClaims == 0)"| CLOSED
+        OPEN -->|"预算 < claimCost"| EXHAUSTED
+        OPEN -->|"过期"| EXPIRED
+        EXHAUSTED -->|"claim 被拒<br/>预算恢复"| OPEN
+        EXHAUSTED -->|"过期"| EXPIRED
+        EXPIRED -->|"withdrawRemaining()<br/>(pendingClaims == 0)"| CLOSED
+    end
 
-    subgraph "Per-Claim 生命周期"
+    subgraph "Per-Claim（dealIndex）生命周期"
         VERIFYING["VERIFYING<br/>等待 verifier"]
-        COMPLETED["COMPLETED ✅<br/>B 已收款"]
-        REJECTED["REJECTED ❌<br/>奖励已退回<br/>failCount[B]++"]
-        CLAIM_TIMEOUT["TIMED_OUT ⏰<br/>全额 claimCost 退回"]
+        COMPLETED["COMPLETED ✅<br/>B 已收款，claimed=true"]
+        REJECTED["REJECTED ❌<br/>failCount[B]++"]
+        CLAIM_TIMEOUT["TIMED_OUT ⏰<br/>claimCost → budget"]
 
         VERIFYING -->|"result > 0"| COMPLETED
         VERIFYING -->|"result < 0"| REJECTED
@@ -267,68 +275,74 @@ flowchart TD
     end
 ```
 
+### 6.4 B 的 Claim 资格
+
+```
+claimed[B] == true       → AlreadyClaimed（已成功领取，完成）
+failCount[B] >= 3        → MaxFailures（在此合约中被封禁）
+无 TwitterRegistry 绑定   → NotVerified
+budget < claimCost       → BudgetExhausted
+已过 deadline            → CampaignExpired
+有待处理的 claim          → PendingClaim（同时只能有一个）
+否则                      → 可 claim
+```
+
 ---
 
 ## 7. 超时与异常路径
 
-### 7.1 超时常量
+### 7.1 常量
 
 | 常量 | 值 | 说明 |
 |------|---|------|
 | `VERIFICATION_TIMEOUT` | 30 分钟 | 每个 claim 的 verifier 响应时限 |
-| `MAX_FAILURES` | 3 | 每地址每 campaign 最大失败次数 |
-
-无 STAGE_TIMEOUT 或 SETTLING_TIMEOUT — campaign 模型没有协商阶段。
+| `MAX_FAILURES` | 3 | 每地址最大失败次数 |
 
 ### 7.2 Verifier 超时（单个 Claim）
 
 ```mermaid
 sequenceDiagram
     participant X as 任何人
-    participant D as DealContract
+    participant C as Contract
 
-    Note over X,D: Claim 处于 VERIFYING 状态，<br/>verifier 未在 VERIFICATION_TIMEOUT 内响应
-    X->>D: 🟢 resetClaim(dealIndex, claimIndex)
-    Note over D: reward + verifierFee + protocolFee → 预算<br/>pendingClaims -= 1<br/>claim 状态 → TIMED_OUT
+    Note over X,C: dealIndex 处于 VERIFYING，<br/>verifier 未在 VERIFICATION_TIMEOUT 内响应
+    X->>C: 🟢 resetVerification(dealIndex, 0)
+    Note over C: claimCost → budget<br/>pendingClaims--<br/>claim → TIMED_OUT
 ```
 
 ### 7.3 Campaign 到期且有剩余预算
 
 ```mermaid
 sequenceDiagram
-    participant A as Campaign 创建者
-    participant D as DealContract
+    participant A as A
+    participant C as Contract
 
-    Note over A,D: 已过 deadline，pendingClaims == 0
-    A->>D: 🟢 withdrawRemaining(dealIndex)
-    Note over D: 剩余预算 → A<br/>🔵 DealPhaseChanged(dealIndex, 5)<br/>🔵 DealStateChanged(dealIndex, CLOSED)
+    Note over A,C: 已过 deadline，pendingClaims == 0
+    A->>C: 🟢 withdrawRemaining()
+    Note over C: budget → A，closed = true
 ```
 
 ### 7.4 Campaign 到期但有待处理 Claim
 
 ```mermaid
 sequenceDiagram
-    participant A as Campaign 创建者
+    participant A as A
     participant V as Verifier
-    participant D as DealContract
+    participant C as Contract
 
-    Note over A,D: 已过 deadline，pendingClaims > 0
+    Note over A,C: 已过 deadline，pendingClaims > 0
 
     alt Verifier 及时响应
-        V->>D: 🟢 reportResult(...)
-        Note over D: Claim 正常解决
+        V->>C: 🟢 reportResult(...)
     else Verifier 超时
-        A->>D: 🟢 resetClaim(dealIndex, claimIndex)
-        Note over D: 全额 claimCost 退回预算
+        A->>C: 🟢 resetVerification(dealIndex, 0)
     end
 
     Note over A: pendingClaims == 0 后：
-    A->>D: 🟢 withdrawRemaining(dealIndex)
+    A->>C: 🟢 withdrawRemaining()
 ```
 
 ### 7.5 预算耗尽 → 拒绝后恢复
-
-当 claim 被拒绝（result < 0）时，`rewardPerFollow` 退回预算（verifierFee + protocolFee 照常支付）。这可能重新开放 campaign：
 
 ```
 EXHAUSTED → claim 被拒 → budget += rewardPerFollow → OPEN（如果预算 ≥ claimCost）
@@ -338,16 +352,14 @@ EXHAUSTED → claim 被拒 → budget += rewardPerFollow → OPEN（如果预算
 
 | 原则 | 实现 |
 |------|------|
-| 不可提前关闭 | A 在 deadline 前不可提取 — 预算已承诺 |
-| 无需协商 | 固定奖励，自助领取 |
-| A 承担所有费用 | verifierFee + protocolFee 均从预算按 claim 扣除，非 B 承担 |
-| 按 claim 收协议费 | PROTOCOL_FEE 在每次 claim 时从预算扣除，不在创建时预收 |
-| B 零输入 | B 只调 `claim(dealIndex)` — 用户名由合约从 TwitterRegistry 链上读取 |
-| 失败记录 | 失败的 claim 增加 `failCount[dealIndex][B]` — 通过 `failures()` 可查 |
-| 身份强制要求 | TwitterRegistry 绑定为必须 — `claim()` 未绑定则 revert |
-| 最多 3 次失败 | `failCount[dealIndex][B] >= 3` → 该 campaign 封禁 |
-| 成功仅一次 | `claimed[dealIndex][B]` 防止成功领取后再次 claim |
-| deadline 约束 | `sigDeadline >= campaignDeadline` — verifier 承诺必须覆盖 campaign |
+| 合约 = campaign | 一个合约实例 = 一个 campaign，无 deal mapping |
+| claim = dealIndex | 每个 B 的 claim 从 `_recordStart` 获得唯一 dealIndex |
+| 不可提前关闭 | A 在 deadline 前不可提取 |
+| A 承担所有费用 | verifierFee + protocolFee 均从预算按 claim 扣除 |
+| 按 claim 收协议费 | PROTOCOL_FEE 在每次 claim 时扣除 |
+| B 零输入 | `claim()` 无参数 — 用户名从 TwitterRegistry 读取 |
+| 最多 3 次失败 | `failCount[B] >= 3` → 在此合约中被封禁 |
+| 成功仅一次 | `claimed[B] = true` → 不可再 claim |
 
 ---
 
@@ -356,17 +368,15 @@ EXHAUSTED → claim 被拒 → budget += rewardPerFollow → OPEN（如果预算
 ### 8.1 Campaign 创建
 
 ```
-A approve 并存入 grossAmount：
-  grossAmount → budget（全额作为预算，无预收费用）
-  protocolFee 不在创建时收取 — 按 claim 收取
+grossAmount → budget（全额，无预收费用）
 ```
 
-### 8.2 每次 Claim 成本（从预算扣除）
+### 8.2 每次 Claim 成本
 
 ```
 claimCost = rewardPerFollow + verifierFee + PROTOCOL_FEE
-每次 claim 锁定 claimCost 从预算扣除
-剩余可 claim 次数 = budget / claimCost
+每次 claim() 从 budget 锁定 claimCost
+remainingSlots = budget / claimCost
 ```
 
 ### 8.3 验证结果 → 资金分配
@@ -378,65 +388,57 @@ claimCost = rewardPerFollow + verifierFee + PROTOCOL_FEE
 | 不确定 (result == 0) | → 预算 | → 预算 | → 预算 | +claimCost |
 | Verifier 超时 | → 预算 | → 预算 | → 预算 | +claimCost |
 
-> 通过/失败时：verifier 和协议方因已完成工作而获得付款。不确定/超时时：无人完成工作，全额退回预算。
-
 ### 8.4 Campaign 结束
 
 ```
-deadline 到期 + 所有 claim 已解决后：
-  剩余预算 → A（通过 withdrawRemaining()）
+deadline 到期 + pendingClaims == 0 后：
+  budget → A（通过 withdrawRemaining()）
 ```
 
 ---
 
 ## 9. 验证清单
 
-### 9.1 createDeal 验证
+### 9.1 createDeal
 
 | # | 检查项 | 错误 |
 |---|--------|------|
-| 1 | `grossAmount >= rewardPerFollow + verifierFee + PROTOCOL_FEE`（至少可 claim 1 次） | InvalidParams |
-| 2 | `rewardPerFollow > 0` | InvalidParams |
-| 3 | `deadline > block.timestamp` | InvalidParams |
-| 4 | `verifier != address(0)`，是合约 | VerifierNotContract |
-| 5 | `target_username` 规范化后非空 | InvalidParams |
-| 6 | `sigDeadline >= deadline`（verifier 承诺覆盖 campaign） | SignatureExpired |
-| 7 | Verifier spec 匹配 + EIP-712 签名有效 | InvalidVerifierSignature |
-| 8 | `USDC.transferFrom(A, 合约, grossAmount)` | TransferFailed |
+| 1 | 尚未初始化（仅调用一次） | AlreadyInitialized |
+| 2 | `grossAmount >= claimCost`（至少可 claim 1 次） | InvalidParams |
+| 3 | `rewardPerFollow > 0` | InvalidParams |
+| 4 | `deadline > block.timestamp` | InvalidParams |
+| 5 | `verifier != address(0)`，是合约 | VerifierNotContract |
+| 6 | `target_username` 规范化后非空 | InvalidParams |
+| 7 | `sigDeadline >= deadline` | SignatureExpired |
+| 8 | Verifier spec 匹配 + EIP-712 签名有效 | InvalidVerifierSignature |
+| 9 | `USDC.transferFrom(A, 合约, grossAmount)` | TransferFailed |
 
-### 9.2 claim 验证
-
-| # | 检查项 | 错误 |
-|---|--------|------|
-| 1 | Deal 存储状态为 OPEN | InvalidStatus |
-| 2 | `block.timestamp <= deadline` | DealExpired |
-| 3 | `budget >= claimCost` | BudgetExhausted |
-| 4 | `!claimed[dealIndex][msg.sender]`（未成功领取） | AlreadyClaimed |
-| 5 | `failCount[dealIndex][msg.sender] < MAX_FAILURES`（< 3） | MaxFailures |
-| 6 | `TwitterRegistry.usernameOf[msg.sender]` 非空 | NotVerified |
-| 7 | 从预算锁定 claimCost | — |
-
-### 9.3 onVerificationResult 验证
+### 9.2 claim
 
 | # | 检查项 | 错误 |
 |---|--------|------|
-| 1 | `msg.sender == deal.verifier` | NotVerifier |
+| 1 | Campaign 未关闭，未过 deadline | CampaignExpired |
+| 2 | `budget >= claimCost` | BudgetExhausted |
+| 3 | `!claimed[msg.sender]` | AlreadyClaimed |
+| 4 | `failCount[msg.sender] < MAX_FAILURES` | MaxFailures |
+| 5 | `TwitterRegistry.usernameOf[msg.sender]` 非空 | NotVerified |
+| 6 | 无待处理的 claim | PendingClaim |
+| 7 | 从预算锁定 claimCost，pendingClaims++ | — |
+
+### 9.3 onVerificationResult
+
+| # | 检查项 | 错误 |
+|---|--------|------|
+| 1 | `msg.sender == verifier` | NotVerifier |
 | 2 | Claim 状态为 VERIFYING | InvalidStatus |
-| 3 | 根据 result 分配资金；result<0 时增加 failCount | — |
+| 3 | 根据 result 分配资金，更新计数器 | — |
 
-### 9.4 withdrawRemaining 验证
+### 9.4 withdrawRemaining
 
 | # | 检查项 | 错误 |
 |---|--------|------|
-| 1 | `msg.sender == deal.partyA` | NotPartyA |
-| 2 | `block.timestamp > deal.deadline` | NotExpired |
-| 3 | `deal.pendingClaims == 0` | PendingClaims |
-| 4 | `deal.budget > 0` | NoFunds |
-
-### 9.5 Verifier 服务前置检查
-
-| # | 检查项 | 操作 |
-|---|--------|------|
-| 1 | Claim 状态为 VERIFYING | 不是则跳过 |
-| 2 | Verifier 地址匹配自身 | 不是则跳过 |
-| 3 | 链上费用 > 0 | 不是则跳过 |
+| 1 | `msg.sender == partyA` | NotPartyA |
+| 2 | `block.timestamp > deadline` | NotExpired |
+| 3 | `pendingClaims == 0` | PendingClaims |
+| 4 | `budget > 0` | NoFunds |
+| 5 | `!closed` | AlreadyClosed |
