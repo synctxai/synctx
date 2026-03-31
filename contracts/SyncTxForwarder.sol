@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 /// @title SyncTxForwarder - EIP-2771 可信转发器
-/// @dev 无 owner / 无 admin / 无策略。签名验证 + nonce 防重放 + sender 追加。
+/// @dev 纯转发器：签名验证 + nonce 防重放 + sender 追加。
+///      Gas 费用回收由链下 Relayer 通过 GasSponsorVault 精确扣费。
 ///      策略控制（合约白名单、用户白名单）由链下 Relayer 负责。
 contract SyncTxForwarder {
     error InvalidSignature();
@@ -122,6 +123,7 @@ contract SyncTxForwarder {
     function _splitSig(bytes calldata sig)
         private pure returns (uint8 v, bytes32 r, bytes32 s)
     {
+        if (sig.length != 65) revert InvalidSignature();
         r = bytes32(sig[0:32]);
         s = bytes32(sig[32:64]);
         v = uint8(bytes1(sig[64:65]));

@@ -197,7 +197,7 @@ sequenceDiagram
     Note over A,D: In this example traders = [A, B], verificationIndex = 0
     Note over A: 🟢 USDC.approve(DealContract, reward + protocolFee + verifierFee)
     A->>D: 🟢 createDeal(partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoter_username) → dealIndex
-    Note over D,V: Calls spec.check(verifier, business params, verifierFee, deadline, sig) for signature verification<br/>Business params taken from createDeal flat arguments; failure reverts: SignatureExpired / InvalidSignature / InvalidVerifierSignature
+    Note over D,V: Calls spec.check(verifier, business params, verifierFee, deadline, sig) for signature verification<br/>Business params taken from createDeal flat arguments<br/>Failure reverts: SignatureExpired, InvalidSignature, InvalidVerifierSignature
     Note over D: 🔵 DealCreated(dealIndex, traders[], verifiers[])<br/>🔵 DealStateChanged(dealIndex, 0)
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
     A->>P: 🟣 send_message [notify B: dealContract, dealIndex, tx_hash]

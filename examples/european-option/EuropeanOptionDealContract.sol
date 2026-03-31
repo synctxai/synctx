@@ -347,8 +347,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
             d,
             stl.amountToHolder,
             d.reservedCollateral - stl.amountToHolder,
-            d.premium,
-            false
+            d.premium
         );
         delete settlements[dealIndex];
     }
@@ -406,8 +405,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
             d,
             holderPayout,
             d.reservedCollateral - holderPayout,
-            d.premium,
-            true
+            d.premium
         );
 
         if (verifierFee > 0) {
@@ -420,8 +418,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
         Deal storage d,
         uint256 collateralToHolder,
         uint256 collateralToWriter,
-        uint256 premiumToWriter,
-        bool successPhase
+        uint256 premiumToWriter
     ) internal {
         address collateralToken = _collateralAsset(d);
 
@@ -430,7 +427,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
         d.status = COMPLETED;
 
         _emitStateChanged(dealIndex, COMPLETED);
-        _emitPhaseChanged(dealIndex, successPhase ? 3 : 3);
+        _emitPhaseChanged(dealIndex, 3);
 
         if (collateralToHolder > 0) {
             if (!IERC20(collateralToken).transfer(d.holder, collateralToHolder)) revert TransferFailed();
