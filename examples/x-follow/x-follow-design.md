@@ -18,6 +18,7 @@ XFollowDealContract is a concrete DealContract implementation for the **"A pays 
 - **Off-chain verification:** Dual-provider parallel check via twitterapi.io (`check_follow_relationship`) + twitter-api45 (`checkfollow.php`)
 - **End conditions:** Budget exhausted OR deadline reached — A cannot close early
 - **Deadline constraint:** Verifier signature deadline must be ≥ campaign deadline (`sigDeadline >= campaignDeadline`), ensuring the verifier's commitment covers the entire campaign. Checked at `createDeal`
+- **Protocol fee:** Per-claim, deducted from budget on each claim (not at creation)
 
 ---
 
@@ -78,20 +79,21 @@ mapping(uint256 => uint256) nextClaimIndex;
 
 | Method | Parameters | Caller | Description |
 |--------|------------|--------|-------------|
-| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A | Create campaign. Deposit `grossAmount` USDC (= protocolFee + budget). Requires `sigDeadline >= deadline` (verifier commitment must cover the campaign) |
-| `claim(dealIndex)` | `uint256 dealIndex` | Any B | B calls with only `dealIndex`. Contract reads `TwitterRegistry.usernameOf[msg.sender]` — reverts `NotVerified` if unbound. Locks (rewardPerFollow + verifierFee) from budget. Emits VerificationRequested |
-| `onVerificationResult(...)` | `uint256 dealIndex, uint256 claimIndex, int8 result, string reason` | Verifier | result>0 → pay B, completedClaims++; result<0 → reward to budget, mark failure on B; result==0 → all to budget |
+| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A | Create campaign. `grossAmount` is deposited entirely as budget (no upfront protocolFee). Requires `sigDeadline >= deadline` and `budget >= claimCost()` |
+| `claim(dealIndex)` | `uint256 dealIndex` | Any B | B calls with only `dealIndex`. Contract reads `TwitterRegistry.usernameOf[msg.sender]` — reverts `NotVerified` if unbound. Locks `claimCost()` (= rewardPerFollow + verifierFee + protocolFee) from budget. Emits VerificationRequested |
+| `onVerificationResult(...)` | `uint256 dealIndex, uint256 claimIndex, int8 result, string reason` | Verifier | result>0 → pay B + verifier + FeeCollector; result<0 → reward to budget, verifier + FeeCollector paid, failCount[B]++; result==0 → all to budget |
 | `withdrawRemaining(dealIndex)` | `uint256 dealIndex` | A | After deadline + pendingClaims==0, A withdraws remaining budget. Deal → CLOSED |
-| `resetClaim(dealIndex, claimIndex)` | `uint256 dealIndex, uint256 claimIndex` | Anyone | After VERIFICATION_TIMEOUT, reset timed-out claim. Reward + fee return to budget |
+| `resetClaim(dealIndex, claimIndex)` | `uint256 dealIndex, uint256 claimIndex` | Anyone | After VERIFICATION_TIMEOUT, reset timed-out claim. Full claimCost returns to budget |
 
 ### 3.2 Query Functions
 
 | Method | Return | Description |
 |--------|--------|-------------|
+| `claimCost()` | `uint96` | `rewardPerFollow + verifierFee + PROTOCOL_FEE` — cost per claim from budget |
 | `dealStatus(dealIndex)` | `uint8` | Derived status: OPEN / EXHAUSTED / EXPIRED / CLOSED / NOT_FOUND |
 | `dealInfo(dealIndex)` | `(address partyA, string target, uint96 reward, uint96 budget, uint48 deadline, uint32 completed, uint32 pending)` | Campaign details for UI |
 | `claimInfo(dealIndex, claimIndex)` | `(address claimer, string username, uint8 status)` | Individual claim details |
-| `canClaim(dealIndex, addr)` | `bool` | Whether addr can claim (has TwitterRegistry binding, not already claimed, budget available, not expired) |
+| `canClaim(dealIndex, addr)` | `bool` | Whether addr can claim (has TwitterRegistry binding, not already claimed, budget ≥ claimCost, not expired) |
 | `failures(dealIndex, addr)` | `uint8` | Number of failed claims for this address in this campaign |
 
 ### 3.3 Inherited from DealBase / IDeal
@@ -118,7 +120,7 @@ IVerifier ← VerifierBase ← XFollowVerifier (instance)
 XFollowVerifier.spec() → XFollowVerifierSpec
 ```
 
-### 4.2 EIP-712 Signature (per-campaign, unified deadline)
+### 4.2 EIP-712 Signature (per-campaign)
 
 TYPEHASH:
 ```
@@ -167,6 +169,7 @@ sequenceDiagram
     participant D as DealContract
     participant V as Verifier
     participant R as TwitterRegistry
+    participant F as FeeCollector
 
     Note over A,V: Setup Phase (once per campaign)
 
@@ -176,8 +179,8 @@ sequenceDiagram
     P-->>A: async message
 
     Note over A: 🟢 USDC.approve(DealContract, grossAmount)
-    A->>D: 🟢 createDeal(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sig, target_username, deadline) → dealIndex
-    Note over D: Verify sig with deadline = campaign deadline<br/>protocolFee → FeeCollector<br/>🔵 DealCreated · DealStateChanged(OPEN)
+    A->>D: 🟢 createDeal(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
+    Note over D: grossAmount → budget (no upfront protocolFee)<br/>🔵 DealCreated · DealStateChanged(OPEN)
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
     Note over B,D: Claim Phase (repeatable, zero input from B)
@@ -186,7 +189,7 @@ sequenceDiagram
     Note over B: 2. Follow target_username on X
     B->>D: 🟡 canClaim(dealIndex, B.address) → true
     B->>D: 🟢 claim(dealIndex)
-    Note over D: Read R.usernameOf[B] → revert if empty<br/>Lock (reward + verifierFee) from budget<br/>🔵 VerificationRequested(dealIndex, claimIndex, verifier)
+    Note over D: Read R.usernameOf[B] → revert if empty<br/>Lock claimCost (reward + verifierFee + protocolFee)<br/>🔵 VerificationRequested(dealIndex, claimIndex, verifier)
     B->>P: 🟣 report_transaction + notify_verifier
     P-->>V: async message
 
@@ -196,11 +199,11 @@ sequenceDiagram
     V->>D: 🟢 reportResult(dealContract, dealIndex, claimIndex, result, reason, expectedFee)
 
     alt result > 0 — following confirmed
-        Note over D: reward → B, fee → verifier<br/>completedClaims++
+        Note over D: reward → B<br/>verifierFee → verifier<br/>protocolFee → FeeCollector<br/>completedClaims++
     else result < 0 — not following
-        Note over D: reward → budget, fee → verifier<br/>failCount[B]++
+        Note over D: reward → budget<br/>verifierFee → verifier<br/>protocolFee → FeeCollector<br/>failCount[B]++
     else result == 0 — inconclusive
-        Note over D: reward + fee → budget
+        Note over D: reward + verifierFee + protocolFee → budget
     end
 
     Note over A,D: Withdrawal Phase (after deadline)
@@ -217,13 +220,14 @@ sequenceDiagram
 
 | Code | Status | Meaning |
 |------|--------|---------|
-| 0 | OPEN | Accepting claims (budget ≥ rewardPerFollow + verifierFee, not past deadline) |
-| 1 | EXHAUSTED | Budget < rewardPerFollow + verifierFee (may recover if claims are rejected) |
+| 0 | OPEN | Accepting claims (budget ≥ claimCost, not past deadline) |
+| 1 | EXHAUSTED | Budget < claimCost (may recover if claims are rejected) |
 | 2 | EXPIRED | Past deadline, pending claims may still resolve, A cannot withdraw yet |
 | 3 | CLOSED | A has withdrawn remaining budget, all claims resolved |
 | 255 | NOT_FOUND | Deal does not exist |
 
 > EXHAUSTED and EXPIRED are derived at runtime (not stored). Stored status is only OPEN or CLOSED.
+> `claimCost = rewardPerFollow + verifierFee + PROTOCOL_FEE`
 
 ### 6.2 Claim Status
 
@@ -232,18 +236,18 @@ sequenceDiagram
 | 0 | VERIFYING | Awaiting verifier response |
 | 1 | COMPLETED | Follow verified, B paid |
 | 2 | REJECTED | Follow not detected, reward returned to budget, failure recorded |
-| 3 | TIMED_OUT | Verifier timed out, reward + fee returned to budget |
+| 3 | TIMED_OUT | Verifier timed out, full claimCost returned to budget |
 
 ### 6.3 State Transition Diagram
 
 ```mermaid
 flowchart TD
     OPEN["0 OPEN<br/>Accepting claims"]
-    EXHAUSTED["1 EXHAUSTED<br/>Budget insufficient<br/>(may recover on rejection)"]
+    EXHAUSTED["1 EXHAUSTED<br/>Budget < claimCost<br/>(may recover on rejection)"]
     EXPIRED["2 EXPIRED<br/>Past deadline<br/>pending claims resolving"]
     CLOSED["3 CLOSED ✅<br/>A withdrew remaining"]
 
-    OPEN -->|"budget < cost per claim"| EXHAUSTED
+    OPEN -->|"budget < claimCost"| EXHAUSTED
     OPEN -->|"block.timestamp > deadline"| EXPIRED
     EXHAUSTED -->|"claim rejected → budget recovered"| OPEN
     EXHAUSTED -->|"block.timestamp > deadline"| EXPIRED
@@ -253,7 +257,7 @@ flowchart TD
         VERIFYING["VERIFYING<br/>Awaiting verifier"]
         COMPLETED["COMPLETED ✅<br/>B paid"]
         REJECTED["REJECTED ❌<br/>Reward returned<br/>failCount[B]++"]
-        CLAIM_TIMEOUT["TIMED_OUT ⏰<br/>All returned"]
+        CLAIM_TIMEOUT["TIMED_OUT ⏰<br/>Full claimCost returned"]
 
         VERIFYING -->|"result > 0"| COMPLETED
         VERIFYING -->|"result < 0"| REJECTED
@@ -283,7 +287,7 @@ sequenceDiagram
 
     Note over X,D: Claim in VERIFYING state,<br/>verifier did not respond within VERIFICATION_TIMEOUT
     X->>D: 🟢 resetClaim(dealIndex, claimIndex)
-    Note over D: reward + verifierFee → budget<br/>pendingClaims -= 1<br/>claim status → TIMED_OUT
+    Note over D: reward + verifierFee + protocolFee → budget<br/>pendingClaims -= 1<br/>claim status → TIMED_OUT
 ```
 
 > Anyone can call resetClaim after timeout — no permissions needed.
@@ -315,7 +319,7 @@ sequenceDiagram
         Note over D: Claim resolved normally
     else Verifier times out
         A->>D: 🟢 resetClaim(dealIndex, claimIndex)
-        Note over D: Reward + fee returned to budget
+        Note over D: Full claimCost returned to budget
     end
 
     Note over A: Once pendingClaims == 0:
@@ -324,10 +328,10 @@ sequenceDiagram
 
 ### 7.5 Budget Exhausted → Recovery on Rejection
 
-When a claim is rejected (result < 0), `rewardPerFollow` returns to the budget. This may re-open the campaign for new claims:
+When a claim is rejected (result < 0), `rewardPerFollow` returns to the budget (verifierFee + protocolFee are still paid out). This may re-open the campaign:
 
 ```
-EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget ≥ cost per claim)
+EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget ≥ claimCost)
 ```
 
 ### 7.6 Design Principles
@@ -336,7 +340,8 @@ EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget �
 |-----------|----------------|
 | No early close | A cannot withdraw before deadline — committed budget |
 | No negotiation | Fixed reward, self-service claim |
-| A pays all fees | verifierFee deducted from budget, not from B |
+| A pays all fees | verifierFee + protocolFee deducted from budget per claim, not from B |
+| Per-claim protocol fee | PROTOCOL_FEE charged from budget on each claim, not at creation |
 | B provides nothing | B calls `claim(dealIndex)` only — username read from TwitterRegistry on-chain |
 | Failure tracking | Failed claims increment `failCount[dealIndex][B]` — visible via `failures()` |
 | Identity required | TwitterRegistry binding mandatory — `claim()` reverts if unbound |
@@ -351,26 +356,28 @@ EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget �
 
 ```
 A approves and deposits grossAmount:
-  grossAmount = protocolFee + budget
-  protocolFee → FeeCollector (non-refundable)
-  budget → contract escrow
+  grossAmount → budget (entire amount, no upfront fee)
+  No protocolFee at creation — charged per claim instead
 ```
 
 ### 8.2 Per-Claim Cost (from budget)
 
 ```
-Each claim locks: rewardPerFollow + verifierFee
-Remaining claimable follows = budget / (rewardPerFollow + verifierFee)
+claimCost = rewardPerFollow + verifierFee + PROTOCOL_FEE
+Each claim locks claimCost from budget
+Remaining claimable follows = budget / claimCost
 ```
 
 ### 8.3 Verification Result → Fund Distribution
 
-| Result | Reward (rewardPerFollow) | Verifier Fee | Budget Change | B Record |
-|--------|--------------------------|--------------|---------------|----------|
-| Pass (result > 0) | → B | → Verifier | — | completedClaims++ |
-| Fail (result < 0) | → budget | → Verifier | +rewardPerFollow | failCount[B]++ |
-| Inconclusive (result == 0) | → budget | → budget | +rewardPerFollow + verifierFee | — |
-| Verifier timeout | → budget | → budget | +rewardPerFollow + verifierFee | — |
+| Result | Reward | Verifier Fee | Protocol Fee | Budget Change |
+|--------|--------|--------------|--------------|---------------|
+| Pass (result > 0) | → B | → Verifier | → FeeCollector | — |
+| Fail (result < 0) | → budget | → Verifier | → FeeCollector | +rewardPerFollow |
+| Inconclusive (result == 0) | → budget | → budget | → budget | +claimCost |
+| Verifier timeout | → budget | → budget | → budget | +claimCost |
+
+> On pass/fail: verifier and protocol are paid for work done. On inconclusive/timeout: no work completed, full refund to budget.
 
 ### 8.4 Campaign End
 
@@ -387,15 +394,14 @@ After deadline + all claims resolved:
 
 | # | Check | Error |
 |---|-------|-------|
-| 1 | `grossAmount > protocolFee` | InvalidParams |
-| 2 | `budget >= rewardPerFollow + verifierFee` (at least 1 claim possible) | InvalidParams |
-| 3 | `rewardPerFollow > 0` | InvalidParams |
-| 4 | `deadline > block.timestamp` | InvalidParams |
-| 5 | `verifier != address(0)`, is contract | VerifierNotContract |
-| 6 | `target_username` non-empty after canonicalization | InvalidParams |
-| 7 | `sigDeadline >= deadline` (verifier commitment covers campaign) | SignatureExpired |
-| 8 | Verifier spec match + EIP-712 signature valid | InvalidVerifierSignature |
-| 9 | `USDC.transferFrom(A, contract, grossAmount)` | TransferFailed |
+| 1 | `grossAmount >= rewardPerFollow + verifierFee + PROTOCOL_FEE` (at least 1 claim) | InvalidParams |
+| 2 | `rewardPerFollow > 0` | InvalidParams |
+| 3 | `deadline > block.timestamp` | InvalidParams |
+| 4 | `verifier != address(0)`, is contract | VerifierNotContract |
+| 5 | `target_username` non-empty after canonicalization | InvalidParams |
+| 6 | `sigDeadline >= deadline` (verifier commitment covers campaign) | SignatureExpired |
+| 7 | Verifier spec match + EIP-712 signature valid | InvalidVerifierSignature |
+| 8 | `USDC.transferFrom(A, contract, grossAmount)` | TransferFailed |
 
 ### 9.2 claim Validations
 
@@ -403,10 +409,10 @@ After deadline + all claims resolved:
 |---|-------|-------|
 | 1 | Deal status is OPEN (stored) | InvalidStatus |
 | 2 | `block.timestamp <= deadline` | DealExpired |
-| 3 | `budget >= rewardPerFollow + verifierFee` | BudgetExhausted |
+| 3 | `budget >= claimCost` | BudgetExhausted |
 | 4 | `!hasClaimed[dealIndex][msg.sender]` | AlreadyClaimed |
 | 5 | `TwitterRegistry.usernameOf[msg.sender]` is non-empty | NotVerified |
-| 6 | Lock (rewardPerFollow + verifierFee) from budget | — |
+| 6 | Lock claimCost from budget | — |
 
 ### 9.3 onVerificationResult Validations
 
