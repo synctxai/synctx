@@ -11,6 +11,7 @@ class TweetInfo:
     """Tweet information returned by upstream API (after normalization)."""
 
     author_username: str        # lowercase, without '@'
+    author_user_id: str         # canonical decimal string
     is_quote: bool
     quoted_tweet_id: Optional[str]  # ID of the quoted original tweet
 

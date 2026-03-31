@@ -21,6 +21,16 @@ def normalise_username(username) -> str:
     return username.lstrip("@").lower()
 
 
+def normalise_user_id(user_id) -> str:
+    """Normalize X/Twitter user_id to a canonical decimal string."""
+    if isinstance(user_id, int):
+        return str(user_id) if user_id > 0 else ""
+    if isinstance(user_id, str):
+        value = user_id.strip()
+        return value if value.isdigit() and value != "0" else ""
+    return ""
+
+
 class BaseFollowProvider(abc.ABC):
     """All follow-check providers must implement this interface."""
 
@@ -41,6 +51,11 @@ class BaseFollowProvider(abc.ABC):
             KnownError — internal issue (auth/quota, etc.), do not retry
             Other exceptions — temporary issue (network/timeout/rate-limit, etc.), can retry
         """
+        ...
+
+    @abc.abstractmethod
+    async def resolve_username(self, user_id: str) -> Optional[str]:
+        """Resolve a user_id to the current username."""
         ...
 
     def _check_response(self, resp: httpx.Response) -> None:

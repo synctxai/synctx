@@ -55,22 +55,22 @@ def load_handlers_module():
 
     x_follow_spec_mod = types.ModuleType("x_follow_spec")
     x_follow_spec_mod.decode_spec_params = lambda data: SimpleNamespace(
-        follower_username="alice",
-        target_username="target",
+        follower_user_id=111,
+        target_user_id=222,
     )
 
     verification_mod = types.ModuleType("verification")
 
-    async def is_following(*args, **kwargs):
+    async def is_following_by_user_ids(*args, **kwargs):
         return None
 
-    verification_mod.is_following = is_following
+    verification_mod.is_following_by_user_ids = is_following_by_user_ids
 
     providers_mod = types.ModuleType("providers")
     providers_mod.__path__ = []
     providers_base_mod = types.ModuleType("providers.base")
-    providers_base_mod.normalise_username = (
-        lambda value: value.lstrip("@").lower() if isinstance(value, str) else ""
+    providers_base_mod.normalise_user_id = (
+        lambda value: str(value) if str(value).isdigit() and str(value) != "0" else ""
     )
 
     sys.modules["config"] = config_mod
@@ -113,7 +113,7 @@ class HandleNotifyVerifyTests(unittest.TestCase):
             "sig": b"\x12\x34",
             "spec_params": b"dummy",
         }
-        self.spec = SimpleNamespace(follower_username="alice", target_username="target")
+        self.spec = SimpleNamespace(follower_user_id=111, target_user_id=222)
 
     def test_notify_verify_rechecks_status_before_report_result(self):
         with patch.object(

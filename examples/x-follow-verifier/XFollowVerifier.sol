@@ -40,7 +40,7 @@ contract XFollowVerifier is VerifierBase {
     function description() external pure override(VerifierBase) returns (string memory) {
         return
             "Verify follow relationships on X (Twitter) for campaign model. "
-            "Per-campaign signature (target_username + fee + deadline). "
+            "Per-campaign signature (target_user_id + fee + deadline). "
             "Dual-provider verification: twitterapi.io + twitter-api45. "
             "EIP-712 signed, max sign deadline 7 days.";
     }

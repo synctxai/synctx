@@ -14,7 +14,7 @@ from chain import report_result, read_verification_params
 from mcp_client import PlatformClient
 from x_quote_spec import decode_spec_params
 from verification import has_quote
-from providers.base import normalise_username
+from providers.base import normalise_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ async def handle_message(client: PlatformClient, msg: dict) -> None:
 async def handle_request_sign(client: PlatformClient, sender: str, content: dict) -> None:
     """Handle a signature request.
 
-    Received: {"action": "request_sign", "params": {"tweet_id": "123", "quoter_username": "user"}, "deadline": 1700000000}
+    Received: {"action": "request_sign", "params": {"tweet_id": "123", "quoter_user_id": "111"}, "deadline": 1700000000}
     Response: {"accepted": true, "fee": 10000, "sig": "0x..."} or {"accepted": false, "reason": "..."}
     """
     raw_params = content.get("params", {})
@@ -59,11 +59,11 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
     deadline = content.get("deadline")
 
     tweet_id = params.get("tweet_id")
-    quoter_username = normalise_username(params.get("quoter_username", ""))
+    quoter_user_id = normalise_user_id(params.get("quoter_user_id", ""))
 
-    if not tweet_id or not quoter_username:
+    if not tweet_id or not quoter_user_id:
         logger.warning("request_sign params incomplete: %s", content)
-        await client.send_message(sender, {"accepted": False, "reason": "Incomplete params, requires tweet_id and quoter_username"})
+        await client.send_message(sender, {"accepted": False, "reason": "Incomplete params, requires tweet_id and quoter_user_id"})
         return
 
     if not deadline:
@@ -92,7 +92,7 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
     try:
         result = sign_verify_request(
             tweet_id=str(tweet_id),
-            quoter_username=quoter_username,
+            quoter_user_id=int(quoter_user_id),
             fee=fee,
             deadline=deadline,
         )
@@ -146,12 +146,12 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
 
         spec = decode_spec_params(on_chain["spec_params"])
         tweet_id = spec.tweet_id
-        username = spec.quoter_username
+        quoter_user_id = str(spec.quoter_user_id)
         quote_tweet_id = spec.quote_tweet_id
-        logger.info("On-chain params: tweet_id=%s, username=%s, quote_tweet_id=%s", tweet_id, username, quote_tweet_id)
+        logger.info("On-chain params: tweet_id=%s, quoter_user_id=%s, quote_tweet_id=%s", tweet_id, quoter_user_id, quote_tweet_id)
 
         # 2. Off-chain verification
-        result_code, reason = await _check_tweet_with_result(username, tweet_id, quote_tweet_id)
+        result_code, reason = await _check_tweet_with_result(quoter_user_id, tweet_id, quote_tweet_id)
         logger.info("Tweet verification result: dealIndex=%s, result=%d, reason=%s", deal_index, result_code, reason)
 
         # 3. On-chain reportResult (pass expectedFee; the contract verifies that DealContract paid the agreed amount)
@@ -188,7 +188,7 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
         })
 
 
-async def _check_tweet_with_result(username: str, target_tweet_id: str, new_tweet_id: str) -> tuple[int, str]:
+async def _check_tweet_with_result(quoter_user_id: str, target_tweet_id: str, new_tweet_id: str) -> tuple[int, str]:
     """Off-chain tweet quote verification, returns (result_code, reason).
 
     result_code: 1=pass, -1=fail, 0=inconclusive
@@ -198,7 +198,7 @@ async def _check_tweet_with_result(username: str, target_tweet_id: str, new_twee
         return -1, "quote tweet id missing"
 
     try:
-        result = await has_quote(username, target_tweet_id, quote_tweet_id)
+        result = await has_quote(quoter_user_id, target_tweet_id, quote_tweet_id)
     except Exception as e:
         logger.warning("Tweet verification API exception, returning inconclusive: %s", e)
         return 0, f"verification inconclusive: {e}"
@@ -214,7 +214,7 @@ async def _check_tweet_with_result(username: str, target_tweet_id: str, new_twee
     logger.info("Quote tweet not found, retrying once after 5s...")
     await asyncio.sleep(5)
     try:
-        result = await has_quote(username, target_tweet_id, quote_tweet_id, min_created_at)
+        result = await has_quote(quoter_user_id, target_tweet_id, quote_tweet_id)
     except Exception as e:
         logger.warning("Retry API exception, returning inconclusive: %s", e)
         return 0, f"verification inconclusive on retry: {e}"

@@ -1,7 +1,7 @@
 """XFollow Spec adapter module — centralized management of XFollow EIP-712 type definitions and specParams encoding/decoding.
 
-Campaign model: signature is per-campaign (target_username only, no follower_username).
-specParams is per-claim (follower_username + target_username).
+Campaign model: signature is per-campaign (target_user_id only, no follower_user_id).
+specParams is per-claim (follower_user_id + target_user_id).
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from config import settings
 
 # ---------------------------------------------------------------------------
 # Complete EIP-712 type definitions (consistent with XFollowVerifierSpec.VERIFY_TYPEHASH)
-# TypeHash: keccak256("Verify(string targetUsername,uint256 fee,uint256 deadline)")
+# TypeHash: keccak256("Verify(uint64 targetUserId,uint256 fee,uint256 deadline)")
 # ---------------------------------------------------------------------------
 
 EIP712_FULL_TYPES = {
@@ -27,7 +27,7 @@ EIP712_FULL_TYPES = {
         {"name": "verifyingContract", "type": "address"},
     ],
     "Verify": [
-        {"name": "targetUsername", "type": "string"},
+        {"name": "targetUserId", "type": "uint64"},
         {"name": "fee", "type": "uint256"},
         {"name": "deadline", "type": "uint256"},
     ],
@@ -42,23 +42,23 @@ DOMAIN = {
 
 # ---------------------------------------------------------------------------
 # specParams encoding/decoding (per-claim)
-# specParams = abi.encode(string follower_username, string target_username)
+# specParams = abi.encode(uint64 follower_user_id, uint64 target_user_id)
 # ---------------------------------------------------------------------------
 
-SPEC_PARAMS_TYPES = ["string", "string"]
+SPEC_PARAMS_TYPES = ["uint64", "uint64"]
 
 
 class SpecParams(NamedTuple):
-    follower_username: str
-    target_username: str
+    follower_user_id: int
+    target_user_id: int
 
 
 def decode_spec_params(spec_params: bytes) -> SpecParams:
     """Decode specParams per the XFollowVerifierSpec definition."""
-    follower_username, target_username = abi_decode(
+    follower_user_id, target_user_id = abi_decode(
         SPEC_PARAMS_TYPES, spec_params
     )
     return SpecParams(
-        follower_username=follower_username,
-        target_username=target_username,
+        follower_user_id=follower_user_id,
+        target_user_id=target_user_id,
     )

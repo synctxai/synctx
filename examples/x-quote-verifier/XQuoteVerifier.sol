@@ -40,7 +40,7 @@ contract XQuoteVerifier is VerifierBase {
     /// @inheritdoc IVerifier
     function description() external pure override(VerifierBase) returns (string memory) {
         return
-            "Verify quote-tweets on X (Twitter). Checks if a specific user quoted a given tweet. "
+            "Verify quote-tweets on X (Twitter). Checks if a specific user_id quoted a given tweet. "
             "EIP-712 signed, max sign deadline 3600s.";
     }
 

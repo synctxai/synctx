@@ -1,7 +1,7 @@
 """Message handling logic — X-Follow Verifier (Campaign Model).
 
-Per-campaign signing: target_username only (no follower_username).
-Per-claim verification: reads follower_username from specParams.
+Per-campaign signing: target_user_id only (no follower_user_id).
+Per-claim verification: reads follower_user_id from specParams.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from signer import sign_verify_request
 from chain import report_result, read_verification_params, read_deal_status
 from mcp_client import PlatformClient
 from x_follow_spec import decode_spec_params
-from verification import is_following
-from providers.base import normalise_username
+from verification import is_following_by_user_ids
+from providers.base import normalise_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -50,29 +50,29 @@ async def handle_message(client: PlatformClient, msg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# request_sign: per-campaign signature (target_username only)
+# request_sign: per-campaign signature (target_user_id only)
 # ---------------------------------------------------------------------------
 
 async def handle_request_sign(client: PlatformClient, sender: str, content: dict, tag: str | None = None) -> None:
     """Handle a signature request for a campaign.
 
-    Received: {"action": "request_sign", "params": {"target_username": "target"}, "deadline": 1700000000, "tag": "..."}
+    Received: {"action": "request_sign", "params": {"target_user_id": "123"}, "deadline": 1700000000, "tag": "..."}
     Response: {"accepted": true, "fee": 10000, "sig": "0x...", "tag": "..."} or {"accepted": false, "reason": "...", "tag": "..."}
     """
     raw_params = content.get("params", {})
     params = json.loads(raw_params) if isinstance(raw_params, str) else raw_params
     deadline = content.get("deadline")
 
-    target_username = normalise_username(params.get("target_username", ""))
+    target_user_id = normalise_user_id(params.get("target_user_id", ""))
 
     async def _reply(resp: dict) -> None:
         if tag is not None:
             resp["tag"] = tag
         await client.send_message(sender, resp)
 
-    if not target_username:
+    if not target_user_id:
         logger.warning("request_sign params incomplete: %s", content)
-        await _reply({"accepted": False, "reason": "Incomplete params, requires target_username"})
+        await _reply({"accepted": False, "reason": "Incomplete params, requires target_user_id"})
         return
 
     if not deadline:
@@ -103,7 +103,7 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
 
     try:
         result = sign_verify_request(
-            target_username=target_username,
+            target_user_id=int(target_user_id),
             fee=fee,
             deadline=deadline,
         )
@@ -115,7 +115,7 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
             "fee": fee,
             "sig": sig,
         }
-        logger.info("Signature successful: target=%s, fee=%d, deadline=%d", target_username, fee, deadline)
+        logger.info("Signature successful: target_user_id=%s, fee=%d, deadline=%d", target_user_id, fee, deadline)
         await _reply(response)
 
     except Exception as e:
@@ -176,12 +176,12 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
             return
 
         spec = decode_spec_params(on_chain["spec_params"])
-        follower = spec.follower_username
-        target = spec.target_username
-        logger.info("On-chain params: follower=%s, target=%s", follower, target)
+        follower_user_id = str(spec.follower_user_id)
+        target_user_id = str(spec.target_user_id)
+        logger.info("On-chain params: follower_user_id=%s, target_user_id=%s", follower_user_id, target_user_id)
 
         # 2. Off-chain verification — dual-provider follow check
-        result_code, reason = await _check_follow_with_result(follower, target)
+        result_code, reason = await _check_follow_with_result(follower_user_id, target_user_id)
         logger.info("Follow verification result: dealIndex=%s, result=%d, reason=%s", deal_index, result_code, reason)
 
         # Re-check status before reportResult so near-timeout claims do not waste a tx.
@@ -224,13 +224,13 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
         })
 
 
-async def _check_follow_with_result(follower: str, target: str) -> tuple[int, str]:
+async def _check_follow_with_result(follower_user_id: str, target_user_id: str) -> tuple[int, str]:
     """Off-chain follow verification, returns (result_code, reason).
 
     result_code: 1=following, -1=not following, 0=inconclusive
     """
     try:
-        result = await is_following(follower, target)
+        result = await is_following_by_user_ids(follower_user_id, target_user_id)
     except Exception as e:
         logger.warning("Follow verification API exception, returning inconclusive: %s", e)
         return 0, f"verification inconclusive: {e}"
@@ -246,7 +246,7 @@ async def _check_follow_with_result(follower: str, target: str) -> tuple[int, st
     logger.info("Follow not detected, retrying once after 5s...")
     await asyncio.sleep(5)
     try:
-        result = await is_following(follower, target)
+        result = await is_following_by_user_ids(follower_user_id, target_user_id)
     except Exception as e:
         logger.warning("Retry API exception, returning inconclusive: %s", e)
         return 0, f"verification inconclusive on retry: {e}"

@@ -1,7 +1,7 @@
 """EIP-712 signature generation — corresponds to the XFollowVerifierSpec Verify struct (campaign model).
 
-Per-campaign signature: signs target_username + fee + deadline.
-No follower_username in signature (each claim has a different follower).
+Per-campaign signature: signs target_user_id + fee + deadline.
+No follower_user_id in signature (each claim has a different follower).
 """
 
 from __future__ import annotations
@@ -35,13 +35,13 @@ def sign_platform_message(message: str) -> str:
 
 
 def sign_verify_request(
-    target_username: str,
+    target_user_id: int,
     fee: int,
     deadline: int,
 ) -> SignResult:
     """Generate an EIP-712 signature corresponding to XFollowVerifierSpec.check's VERIFY_TYPEHASH.
 
-    Per-campaign signature: target_username + fee + deadline.
+    Per-campaign signature: target_user_id + fee + deadline.
     """
 
     typed_data = {
@@ -49,7 +49,7 @@ def sign_verify_request(
         "primaryType": "Verify",
         "domain": DOMAIN,
         "message": {
-            "targetUsername": target_username,
+            "targetUserId": target_user_id,
             "fee": fee,
             "deadline": deadline,
         },

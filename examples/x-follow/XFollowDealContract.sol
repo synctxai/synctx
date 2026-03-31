@@ -70,7 +70,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         address claimer;             // B 的地址
         uint48  timestamp;           // claim 创建时间
         uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT
-        string  follower_username;   // claim 时从 TwitterRegistry 读取
+        uint64  follower_user_id;    // claim 时从 TwitterRegistry 读取
     }
 
     // ===================== 常量 =====================
@@ -96,7 +96,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     uint32  public pendingClaims;
     uint32  public completedClaims;
     uint256 public signatureDeadline;
-    string  public target_username;
+    uint64  public target_user_id;
     bytes   public verifierSignature;
 
     // ===================== Per-Claim 存储 =====================
@@ -144,7 +144,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         uint96  rewardPerFollow_,
         uint256 sigDeadline,
         bytes calldata sig,
-        string calldata target_username_,
+        uint64  target_user_id_,
         uint48  deadline_
     ) external returns (uint256) {
         if (partyA != address(0)) revert AlreadyInitialized();
@@ -159,10 +159,9 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (sigDeadline < deadline_) revert SignatureExpired();
         if (grossAmount < rewardPerFollow_ + verifierFee_ + PROTOCOL_FEE) revert InsufficientBudget();
 
-        string memory canonicalTarget = _canonicalizeUsername(target_username_);
-        if (bytes(canonicalTarget).length == 0) revert InvalidParams();
+        if (target_user_id_ == 0) revert InvalidParams();
 
-        _verifyVerifierSignature(verifier_, canonicalTarget, verifierFee_, sigDeadline, sig);
+        _verifyVerifierSignature(verifier_, target_user_id_, verifierFee_, sigDeadline, sig);
 
         // USDC 转入
         if (!IERC20(feeToken).transferFrom(sender, address(this), grossAmount)) revert TransferFailed();
@@ -176,7 +175,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         deadline = deadline_;
         budget = grossAmount;
         signatureDeadline = sigDeadline;
-        target_username = canonicalTarget;
+        target_user_id = target_user_id_;
         verifierSignature = sig;
 
         return 0; // campaign 本身不需要 dealIndex
@@ -184,7 +183,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== Claim（每个 claim = 一个 dealIndex） =====================
 
-    /// @notice B 领取关注奖励。无参数，合约从 TwitterRegistry 读取 B 的用户名。
+    /// @notice B 领取关注奖励。无参数，合约从 TwitterRegistry 读取 B 的 user_id。
     function claim() external returns (uint256 dealIndex) {
         // 检查并可能触发 auto-close
         _checkAndClose();
@@ -197,13 +196,13 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         // 检查是否有 pending claim
         if (_hasPendingClaim(sender)) revert PendingClaim();
 
-        // 从 TwitterRegistry 读取用户名
+        // 从 TwitterRegistry 读取 user_id
         (bool success, bytes memory data) = TWITTER_REGISTRY.staticcall(
-            abi.encodeWithSignature("usernameOf(address)", sender)
+            abi.encodeWithSignature("userIdOf(address)", sender)
         );
         if (!success) revert NotVerified();
-        string memory followerUsername = abi.decode(data, (string));
-        if (bytes(followerUsername).length == 0) revert NotVerified();
+        uint64 followerUserId = abi.decode(data, (uint64));
+        if (followerUserId == 0) revert NotVerified();
 
         uint96 cost = _claimCost();
         if (budget < cost) {
@@ -230,7 +229,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
             claimer: sender,
             timestamp: uint48(block.timestamp),
             status: VERIFYING,
-            follower_username: followerUsername
+            follower_user_id: followerUserId
         });
         pendingClaimIndex[sender] = dealIndex;
         pendingClaims++;
@@ -364,7 +363,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     function _verifyVerifierSignature(
         address verifier_,
-        string memory canonicalTarget,
+        uint64 targetUserId,
         uint96 fee,
         uint256 sigDeadline,
         bytes calldata sig
@@ -372,26 +371,9 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         address verifierSpec = IVerifier(verifier_).spec();
         if (verifierSpec != REQUIRED_SPEC) revert InvalidSpecAddress();
         address recovered = XFollowVerifierSpec(verifierSpec).check(
-            verifier_, canonicalTarget, uint256(fee), sigDeadline, sig
+            verifier_, targetUserId, uint256(fee), sigDeadline, sig
         );
         if (recovered != IVerifier(verifier_).signer()) revert InvalidVerifierSignature();
-    }
-
-    function _canonicalizeUsername(string memory value) internal pure returns (string memory) {
-        bytes memory raw = bytes(value);
-        uint256 start = 0;
-        while (start < raw.length && raw[start] == 0x40) {
-            unchecked { ++start; }
-        }
-        bytes memory normalized = new bytes(raw.length - start);
-        for (uint256 i = start; i < raw.length; ++i) {
-            bytes1 char_ = raw[i];
-            if (char_ >= 0x41 && char_ <= 0x5A) {
-                char_ = bytes1(uint8(char_) + 32);
-            }
-            normalized[i - start] = char_;
-        }
-        return string(normalized);
     }
 
     // ===================== 查询函数 =====================
@@ -418,11 +400,11 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (_hasPendingClaim(addr)) return false;
         // 检查 TwitterRegistry（staticcall 不 revert）
         (bool success, bytes memory data) = TWITTER_REGISTRY.staticcall(
-            abi.encodeWithSignature("usernameOf(address)", addr)
+            abi.encodeWithSignature("userIdOf(address)", addr)
         );
         if (!success) return false;
-        string memory username = abi.decode(data, (string));
-        return bytes(username).length > 0;
+        uint64 userId = abi.decode(data, (uint64));
+        return userId != 0;
     }
 
     /// @notice 地址的失败次数
@@ -448,7 +430,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function version() external pure override returns (string memory) {
-        return "2.0";
+        return "3.0";
     }
 
     function protocolFeePolicy() external pure override returns (string memory) {
@@ -472,7 +454,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         Claim storage c = claims[dealIndex];
         if (c.claimer == address(0)) revert InvalidParams();
 
-        bytes memory specParams = abi.encode(c.follower_username, target_username);
+        bytes memory specParams = abi.encode(c.follower_user_id, target_user_id);
         return (verifier, uint256(verifierFee), signatureDeadline, verifierSignature, specParams);
     }
 
