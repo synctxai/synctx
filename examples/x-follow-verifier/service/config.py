@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     # HTTP request timeout (seconds)
     request_timeout: int = 15
 
-    # TwitterRegistry contract address (for identity verification check)
-    twitter_registry_address: str = ""
+    # TwitterRegistry contract address (required — follower must have verified Twitter identity)
+    twitter_registry_address: str
 
     # Provider host address
     twitter_api_host: str = "twitter-api45.p.rapidapi.com"

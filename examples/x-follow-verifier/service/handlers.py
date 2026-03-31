@@ -16,6 +16,12 @@ from x_follow_spec import decode_spec_params
 from verification import is_following
 from providers.base import normalise_username
 
+# TwitterRegistry binding is mandatory for X Follow deals.
+# This eliminates the need for pre-sign follow status checks:
+# - Identity is guaranteed: partyB's wallet is bound to follower_username
+# - No one can impersonate or claim credit for another user's follow
+# - Verification simply checks: is follower_username following target_username?
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,24 +105,16 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
         await _reply({"accepted": False, "reason": "Verifier fee must be > 0"})
         return
 
-    # Pre-check: follower must have verified Twitter identity OR not already following target
-    twitter_verified = False
+    # Pre-check: follower must have a verified Twitter identity in TwitterRegistry
     try:
-        twitter_verified = is_twitter_verified(follower_username)
+        if not is_twitter_verified(follower_username):
+            logger.warning("request_sign rejected: %s has no TwitterRegistry binding", follower_username)
+            await _reply({"accepted": False, "reason": f"@{follower_username} has no verified Twitter identity in TwitterRegistry. Bind via platform first."})
+            return
     except Exception as e:
-        logger.warning("TwitterRegistry check failed, skipping: %s", e)
-
-    if not twitter_verified:
-        # Not verified via TwitterRegistry — check they are not already following
-        try:
-            follow_result = await is_following(follower_username, target_username)
-            if follow_result.error is None and follow_result.following:
-                logger.warning("request_sign rejected: %s already follows %s and has no TwitterRegistry binding",
-                               follower_username, target_username)
-                await _reply({"accepted": False, "reason": f"@{follower_username} already follows @{target_username}. Verify Twitter identity via TwitterRegistry or ensure not already following."})
-                return
-        except Exception as e:
-            logger.warning("Pre-check follow status failed, proceeding: %s", e)
+        logger.error("TwitterRegistry check failed: %s", e, exc_info=True)
+        await _reply({"accepted": False, "reason": f"TwitterRegistry check failed: {e}"})
+        return
 
     try:
         result = sign_verify_request(
