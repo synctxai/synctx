@@ -113,7 +113,9 @@ mapping(address => uint8) public failCount;    // 失败次数；>= MAX_FAILURES
 | `instruction()` | Markdown 操作指南 |
 | `requiredSpecs()` | `[XFollowVerifierSpec]` |
 | `verificationParams(dealIndex, 0)` | 返回指定 claim 的 verifier + specParams |
-| `phase(dealIndex)` | 0=不存在，1=待处理(不使用)，2=活跃(VERIFYING)，3=成功，4=失败 |
+| `requestVerification(dealIndex, 0)` | 始终 revert — 验证由 `claim()` 自动触发 |
+| `phase(dealIndex)` | 见 Section 6.3 |
+| `dealExists(dealIndex)` | claim 是否存在 |
 
 ---
 
@@ -235,17 +237,60 @@ sequenceDiagram
 
 > EXHAUSTED 和 EXPIRED 在运行时派生。存储标志仅有 `closed`。
 
-### 6.2 Per-Claim 状态（`dealStatus(dealIndex)`）
+### 6.2 Per-Claim `dealStatus(dealIndex)`
 
-| 代码 | 状态 | 含义 |
-|------|------|------|
-| 0 | VERIFYING | 等待 verifier 响应 |
-| 1 | COMPLETED | 关注已验证，B 已收款 |
-| 2 | REJECTED | 未检测到关注或不确定，奖励已退回 |
-| 3 | TIMED_OUT | Verifier 超时，全额 claimCost 退回 |
-| 255 | NOT_FOUND | Claim 不存在 |
+> 遵循与 XQuoteDealContract 相同的存储+派生模式。存储状态在状态变更时写入。派生状态由存储状态 + 超时条件在运行时计算。`dealStatus()` 不依赖调用者 — 任何人看到的值相同。
 
-### 6.3 状态转换图
+| 代码 | 状态 | 存储/派生 | 含义 |
+|------|------|---------|------|
+| 0 | VERIFYING | 存储 | 等待 verifier 响应，未超时 |
+| 1 | VERIFIER_TIMED_OUT | 派生（VERIFYING + 已超时） | Verifier 超期，可调用 `resetVerification()` |
+| 2 | COMPLETED | 存储 | 关注已验证，B 已收款 |
+| 3 | REJECTED | 存储 | 未检测到关注或不确定，奖励已退回 |
+| 4 | TIMED_OUT | 存储（`resetVerification` 后） | Verifier 超时，全额 claimCost 退回预算 |
+| 255 | NOT_FOUND | — | Claim 不存在 |
+
+```solidity
+function dealStatus(uint256 dealIndex) external view override returns (uint8) {
+    Claim storage c = claims[dealIndex];
+    if (c.claimer == address(0)) return NOT_FOUND;       // 255
+
+    if (c.status == VERIFYING) {
+        if (block.timestamp > uint256(c.timestamp) + VERIFICATION_TIMEOUT) {
+            return VERIFIER_TIMED_OUT;                    // 1
+        }
+        return VERIFYING;                                 // 0
+    }
+    return c.status;  // COMPLETED(2), REJECTED(3), TIMED_OUT(4)
+}
+```
+
+### 6.3 Per-Claim `phase(dealIndex)`
+
+> 映射到 IDeal 的统一 phase：0=NotFound，1=Pending，2=Active，3=Success，4=Failed，5=Cancelled。
+> Claim 跳过 Pending（创建即 Active），不可 Cancelled。
+
+| dealStatus | phase | IDeal phase 名称 |
+|------------|-------|------------------|
+| NOT_FOUND (255) | 0 | NotFound |
+| VERIFYING (0) | 2 | Active |
+| VERIFIER_TIMED_OUT (1) | 2 | Active（仍可解决） |
+| COMPLETED (2) | 3 | Success |
+| REJECTED (3) | 4 | Failed |
+| TIMED_OUT (4) | 4 | Failed |
+
+```solidity
+function phase(uint256 dealIndex) external view override returns (uint8) {
+    Claim storage c = claims[dealIndex];
+    if (c.claimer == address(0)) return 0;  // NotFound
+    uint8 s = c.status;
+    if (s == VERIFYING) return 2;           // Active
+    if (s == COMPLETED) return 3;           // Success
+    return 4;                               // Failed (REJECTED or TIMED_OUT)
+}
+```
+
+### 6.4 状态转换图
 
 ```mermaid
 flowchart TD
@@ -263,19 +308,31 @@ flowchart TD
     end
 
     subgraph "Per-Claim（dealIndex）生命周期"
-        VERIFYING["VERIFYING<br/>等待 verifier"]
-        COMPLETED["COMPLETED ✅<br/>B 已收款，claimed=true"]
-        REJECTED["REJECTED ❌<br/>failCount[B]++"]
-        CLAIM_TIMEOUT["TIMED_OUT ⏰<br/>claimCost → budget"]
+        VERIFYING["0 VERIFYING<br/>等待 verifier"]
+        VERIFIER_TIMED_OUT["1 VERIFIER_TIMED_OUT<br/>（派生）"]
+        COMPLETED["2 COMPLETED ✅<br/>B 已收款，claimed=true"]
+        REJECTED["3 REJECTED ❌<br/>failCount[B]++"]
+        CLAIM_TIMEOUT["4 TIMED_OUT ⏰<br/>claimCost → budget"]
 
         VERIFYING -->|"result > 0"| COMPLETED
         VERIFYING -->|"result < 0"| REJECTED
         VERIFYING -->|"result == 0"| REJECTED
-        VERIFYING -->|"VERIFICATION_TIMEOUT"| CLAIM_TIMEOUT
+        VERIFYING -->|"超过 VERIFICATION_TIMEOUT"| VERIFIER_TIMED_OUT
+        VERIFIER_TIMED_OUT -->|"resetVerification()"| CLAIM_TIMEOUT
     end
 ```
 
-### 6.4 B 的 Claim 资格
+### 6.5 事件发射
+
+| 操作 | 发出的事件 |
+|------|-----------|
+| `claim()` | `DealCreated(dealIndex, [B], [verifier])` → `DealStateChanged(dealIndex, 0)` → `DealPhaseChanged(dealIndex, 2)` → `VerificationRequested(dealIndex, 0, verifier)` |
+| `onVerificationResult(result > 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 2)` → `DealPhaseChanged(dealIndex, 3)` |
+| `onVerificationResult(result < 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 3)` → `DealPhaseChanged(dealIndex, 4)` |
+| `onVerificationResult(result == 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 3)` → `DealPhaseChanged(dealIndex, 4)` |
+| `resetVerification()` | `DealStateChanged(dealIndex, 4)` → `DealPhaseChanged(dealIndex, 4)` |
+
+### 6.6 B 的 Claim 资格
 
 ```
 claimed[B] == true       → AlreadyClaimed（已成功领取，完成）

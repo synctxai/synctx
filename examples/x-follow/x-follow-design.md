@@ -113,7 +113,9 @@ mapping(address => uint8) public failCount;    // failed attempts; >= MAX_FAILUR
 | `instruction()` | Markdown operation guide |
 | `requiredSpecs()` | `[XFollowVerifierSpec]` |
 | `verificationParams(dealIndex, 0)` | Returns verifier + specParams for a claim |
-| `phase(dealIndex)` | 0=NotFound, 1=Pending(never), 2=Active(VERIFYING), 3=Success, 4=Failed |
+| `requestVerification(dealIndex, 0)` | Always reverts — verification is auto-triggered by `claim()` |
+| `phase(dealIndex)` | See Section 6.3 |
+| `dealExists(dealIndex)` | Whether a claim exists |
 
 ---
 
@@ -235,17 +237,60 @@ sequenceDiagram
 
 > EXHAUSTED and EXPIRED are derived at runtime. Stored flag is only `closed`.
 
-### 6.2 Per-Claim Status (`dealStatus(dealIndex)`)
+### 6.2 Per-Claim `dealStatus(dealIndex)`
 
-| Code | Status | Meaning |
-|------|--------|---------|
-| 0 | VERIFYING | Awaiting verifier response |
-| 1 | COMPLETED | Follow verified, B paid |
-| 2 | REJECTED | Follow not detected or inconclusive, reward returned |
-| 3 | TIMED_OUT | Verifier timed out, full claimCost returned |
-| 255 | NOT_FOUND | Claim does not exist |
+> Follows the same stored + derived pattern as XQuoteDealContract. Stored status is written on state changes. Derived status is computed at runtime from stored status + timeout conditions. `dealStatus()` is caller-independent — anyone sees the same value.
 
-### 6.3 State Transition Diagram
+| Code | Status | Stored/Derived | Meaning |
+|------|--------|---------------|---------|
+| 0 | VERIFYING | Stored | Awaiting verifier response, not timed out |
+| 1 | VERIFIER_TIMED_OUT | Derived (VERIFYING + past timeout) | Verifier missed deadline, eligible for `resetVerification()` |
+| 2 | COMPLETED | Stored | Follow verified, B paid |
+| 3 | REJECTED | Stored | Follow not detected or inconclusive, reward returned |
+| 4 | TIMED_OUT | Stored (after `resetVerification`) | Verifier timed out, full claimCost returned to budget |
+| 255 | NOT_FOUND | — | Claim does not exist |
+
+```solidity
+function dealStatus(uint256 dealIndex) external view override returns (uint8) {
+    Claim storage c = claims[dealIndex];
+    if (c.claimer == address(0)) return NOT_FOUND;       // 255
+
+    if (c.status == VERIFYING) {
+        if (block.timestamp > uint256(c.timestamp) + VERIFICATION_TIMEOUT) {
+            return VERIFIER_TIMED_OUT;                    // 1
+        }
+        return VERIFYING;                                 // 0
+    }
+    return c.status;  // COMPLETED(2), REJECTED(3), TIMED_OUT(4)
+}
+```
+
+### 6.3 Per-Claim `phase(dealIndex)`
+
+> Maps to IDeal's unified phase: 0=NotFound, 1=Pending, 2=Active, 3=Success, 4=Failed, 5=Cancelled.
+> Claims skip Pending (created directly as Active) and cannot be Cancelled.
+
+| dealStatus | phase | IDeal phase name |
+|------------|-------|------------------|
+| NOT_FOUND (255) | 0 | NotFound |
+| VERIFYING (0) | 2 | Active |
+| VERIFIER_TIMED_OUT (1) | 2 | Active (still resolvable) |
+| COMPLETED (2) | 3 | Success |
+| REJECTED (3) | 4 | Failed |
+| TIMED_OUT (4) | 4 | Failed |
+
+```solidity
+function phase(uint256 dealIndex) external view override returns (uint8) {
+    Claim storage c = claims[dealIndex];
+    if (c.claimer == address(0)) return 0;  // NotFound
+    uint8 s = c.status;
+    if (s == VERIFYING) return 2;           // Active
+    if (s == COMPLETED) return 3;           // Success
+    return 4;                               // Failed (REJECTED or TIMED_OUT)
+}
+```
+
+### 6.4 State Transition Diagram
 
 ```mermaid
 flowchart TD
@@ -263,19 +308,31 @@ flowchart TD
     end
 
     subgraph "Per-Claim (dealIndex) Lifecycle"
-        VERIFYING["VERIFYING<br/>Awaiting verifier"]
-        COMPLETED["COMPLETED ✅<br/>B paid, claimed=true"]
-        REJECTED["REJECTED ❌<br/>failCount[B]++"]
-        CLAIM_TIMEOUT["TIMED_OUT ⏰<br/>claimCost → budget"]
+        VERIFYING["0 VERIFYING<br/>Awaiting verifier"]
+        VERIFIER_TIMED_OUT["1 VERIFIER_TIMED_OUT<br/>(derived)"]
+        COMPLETED["2 COMPLETED ✅<br/>B paid, claimed=true"]
+        REJECTED["3 REJECTED ❌<br/>failCount[B]++"]
+        CLAIM_TIMEOUT["4 TIMED_OUT ⏰<br/>claimCost → budget"]
 
         VERIFYING -->|"result > 0"| COMPLETED
         VERIFYING -->|"result < 0"| REJECTED
         VERIFYING -->|"result == 0"| REJECTED
-        VERIFYING -->|"VERIFICATION_TIMEOUT"| CLAIM_TIMEOUT
+        VERIFYING -->|"past VERIFICATION_TIMEOUT"| VERIFIER_TIMED_OUT
+        VERIFIER_TIMED_OUT -->|"resetVerification()"| CLAIM_TIMEOUT
     end
 ```
 
-### 6.4 B's Claim Eligibility
+### 6.5 Event Emissions
+
+| Action | Events Emitted |
+|--------|---------------|
+| `claim()` | `DealCreated(dealIndex, [B], [verifier])` → `DealStateChanged(dealIndex, 0)` → `DealPhaseChanged(dealIndex, 2)` → `VerificationRequested(dealIndex, 0, verifier)` |
+| `onVerificationResult(result > 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 2)` → `DealPhaseChanged(dealIndex, 3)` |
+| `onVerificationResult(result < 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 3)` → `DealPhaseChanged(dealIndex, 4)` |
+| `onVerificationResult(result == 0)` | `VerificationReceived(dealIndex, 0, verifier, result)` → `DealStateChanged(dealIndex, 3)` → `DealPhaseChanged(dealIndex, 4)` |
+| `resetVerification()` | `DealStateChanged(dealIndex, 4)` → `DealPhaseChanged(dealIndex, 4)` |
+
+### 6.6 B's Claim Eligibility
 
 ```
 claimed[B] == true       → AlreadyClaimed (got paid, done)
