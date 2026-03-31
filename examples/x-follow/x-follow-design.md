@@ -19,6 +19,7 @@ XFollowDealContract is a concrete DealContract implementation for the **"A pays 
 - **End conditions:** Budget exhausted OR deadline reached — A cannot close early
 - **Deadline constraint:** Verifier signature deadline must be ≥ campaign deadline (`sigDeadline >= campaignDeadline`), ensuring the verifier's commitment covers the entire campaign. Checked at `createDeal`
 - **Protocol fee:** Per-claim, deducted from budget on each claim (not at creation)
+- **Failure limit:** `MAX_FAILURES = 3` — B is banned from a campaign after 3 failed claims. Can retry after failure until the limit
 
 ---
 
@@ -66,8 +67,8 @@ struct Claim {
 ```solidity
 mapping(uint256 => Deal) deals;
 mapping(uint256 => mapping(uint256 => Claim)) claims;
-mapping(uint256 => mapping(address => bool)) hasClaimed;   // prevent double-claiming
-mapping(uint256 => mapping(address => uint8)) failCount;   // track failures per address
+mapping(uint256 => mapping(address => bool)) claimed;      // true after successful claim (B got paid)
+mapping(uint256 => mapping(address => uint8)) failCount;   // failed attempts; ≥ MAX_FAILURES → banned
 mapping(uint256 => uint256) nextClaimIndex;
 ```
 
@@ -80,8 +81,8 @@ mapping(uint256 => uint256) nextClaimIndex;
 | Method | Parameters | Caller | Description |
 |--------|------------|--------|-------------|
 | `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A | Create campaign. `grossAmount` is deposited entirely as budget (no upfront protocolFee). Requires `sigDeadline >= deadline` and `budget >= claimCost()` |
-| `claim(dealIndex)` | `uint256 dealIndex` | Any B | B calls with only `dealIndex`. Contract reads `TwitterRegistry.usernameOf[msg.sender]` — reverts `NotVerified` if unbound. Locks `claimCost()` (= rewardPerFollow + verifierFee + protocolFee) from budget. Emits VerificationRequested |
-| `onVerificationResult(...)` | `uint256 dealIndex, uint256 claimIndex, int8 result, string reason` | Verifier | result>0 → pay B + verifier + FeeCollector; result<0 → reward to budget, verifier + FeeCollector paid, failCount[B]++; result==0 → all to budget |
+| `claim(dealIndex)` | `uint256 dealIndex` | Any B | B calls with only `dealIndex`. Contract reads `TwitterRegistry.usernameOf[msg.sender]` — reverts `NotVerified` if unbound. Reverts `AlreadyClaimed` if already paid, or `MaxFailures` if failed ≥ 3 times. Locks `claimCost()` from budget. Emits VerificationRequested |
+| `onVerificationResult(...)` | `uint256 dealIndex, uint256 claimIndex, int8 result, string reason` | Verifier | result>0 → pay B, set claimed[B]=true; result<0 → reward to budget, failCount[B]++; result==0 → all to budget. Verifier + FeeCollector paid on pass/fail |
 | `withdrawRemaining(dealIndex)` | `uint256 dealIndex` | A | After deadline + pendingClaims==0, A withdraws remaining budget. Deal → CLOSED |
 | `resetClaim(dealIndex, claimIndex)` | `uint256 dealIndex, uint256 claimIndex` | Anyone | After VERIFICATION_TIMEOUT, reset timed-out claim. Full claimCost returns to budget |
 
@@ -93,7 +94,7 @@ mapping(uint256 => uint256) nextClaimIndex;
 | `dealStatus(dealIndex)` | `uint8` | Derived status: OPEN / EXHAUSTED / EXPIRED / CLOSED / NOT_FOUND |
 | `dealInfo(dealIndex)` | `(address partyA, string target, uint96 reward, uint96 budget, uint48 deadline, uint32 completed, uint32 pending)` | Campaign details for UI |
 | `claimInfo(dealIndex, claimIndex)` | `(address claimer, string username, uint8 status)` | Individual claim details |
-| `canClaim(dealIndex, addr)` | `bool` | Whether addr can claim (has TwitterRegistry binding, not already claimed, budget ≥ claimCost, not expired) |
+| `canClaim(dealIndex, addr)` | `bool` | Whether addr can claim (has TwitterRegistry binding, not already paid, failCount < 3, budget ≥ claimCost, not expired) |
 | `failures(dealIndex, addr)` | `uint8` | Number of failed claims for this address in this campaign |
 
 ### 3.3 Inherited from DealBase / IDeal
@@ -275,6 +276,7 @@ flowchart TD
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `VERIFICATION_TIMEOUT` | 30 minutes | Per-claim verifier response time limit |
+| `MAX_FAILURES` | 3 | Max failed claims per address per campaign |
 
 No STAGE_TIMEOUT or SETTLING_TIMEOUT — the campaign model has no negotiation phases.
 
@@ -345,7 +347,8 @@ EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget �
 | B provides nothing | B calls `claim(dealIndex)` only — username read from TwitterRegistry on-chain |
 | Failure tracking | Failed claims increment `failCount[dealIndex][B]` — visible via `failures()` |
 | Identity required | TwitterRegistry binding mandatory — `claim()` reverts if unbound |
-| One claim per user | `hasClaimed` mapping prevents double claims |
+| Max 3 failures | `failCount[dealIndex][B] >= 3` → banned from this campaign |
+| One success per user | `claimed[dealIndex][B]` prevents claiming after paid |
 | Deadline constraint | `sigDeadline >= campaignDeadline` — verifier commitment must cover the campaign |
 
 ---
@@ -410,9 +413,10 @@ After deadline + all claims resolved:
 | 1 | Deal status is OPEN (stored) | InvalidStatus |
 | 2 | `block.timestamp <= deadline` | DealExpired |
 | 3 | `budget >= claimCost` | BudgetExhausted |
-| 4 | `!hasClaimed[dealIndex][msg.sender]` | AlreadyClaimed |
-| 5 | `TwitterRegistry.usernameOf[msg.sender]` is non-empty | NotVerified |
-| 6 | Lock claimCost from budget | — |
+| 4 | `!claimed[dealIndex][msg.sender]` (not already paid) | AlreadyClaimed |
+| 5 | `failCount[dealIndex][msg.sender] < MAX_FAILURES` (< 3) | MaxFailures |
+| 6 | `TwitterRegistry.usernameOf[msg.sender]` is non-empty | NotVerified |
+| 7 | Lock claimCost from budget | — |
 
 ### 9.3 onVerificationResult Validations
 
