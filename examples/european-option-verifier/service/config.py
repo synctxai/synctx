@@ -21,7 +21,6 @@ class Settings(BaseSettings):
 
     # JSON object keyed by "<underlying_lowercase>:<quote_lowercase>"
     pair_feeds_json: str = "{}"
-    max_round_scan: int = 64
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

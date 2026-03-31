@@ -106,6 +106,20 @@ CHAINLINK_FEED_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [],
+        "name": "phaseId",
+        "outputs": [{"name": "", "type": "uint16"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "", "type": "uint16"}],
+        "name": "phaseAggregators",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 ERC20_METADATA_ABI = [
