@@ -41,7 +41,7 @@ XFollowFactory（开发者部署一次）
 - **Clone 模式：** EIP-1167 最小代理。所有子合约共享 implementation 字节码，各自有独立 storage
 - **Gasless：** 工厂设置 `trustedForwarder` → 子合约继承 → A 的 createCampaign 和 B 的 claim() 均通过 relayer 免 gas。Gas 由开发者的 relayer vault 支付
 - **生命周期：** `createCampaign()` → 子合约直接进入 OPEN（无 TESTING 阶段）
-- **自动注册：** 工厂 emit `CampaignCreated(address campaign, address creator)` → 平台监听工厂事件 → 自动发现并注册子合约（每个实现 IDeal 接口）
+- **自动注册：** 工厂 emit `SubContractCreated(address campaign, address creator)` → 平台监听工厂事件 → 自动发现并注册子合约（每个实现 IDeal 接口）
 - **身份：** `TwitterRegistry` 绑定为 B 的强制要求
 - **协议费：** 按 claim 收取，从 campaign 预算扣除 → 开发者的 feeCollector
 - **失败限制：** `MAX_FAILURES = 3`，每地址每 campaign
@@ -67,13 +67,8 @@ contract XFollowFactory {
 
     // ===================== 事件 =====================
 
-    event CampaignCreated(
-        address indexed campaign,
-        address indexed creator,
-        string target_username,
-        uint96 rewardPerFollow,
-        uint48 deadline
-    );
+    /// @dev 协议级事件，定义在 IDeal 中。平台监听此事件自动注册子合约。
+    event SubContractCreated(address indexed subContract);
 
     // ===================== 函数 =====================
 
@@ -141,7 +136,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
 | `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | 开发者 | 部署工厂，设置共享配置 |
-| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_username, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit CampaignCreated。返回子合约地址 |
+| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_username, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
 
 ### 3.2 XFollowCampaign 函数
 
@@ -245,7 +240,7 @@ sequenceDiagram
 
     Note over A: 🟢 USDC.approve(factory, grossAmount)
     A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
-    Note over Fac: 1. Clone implementation → 子合约地址<br/>2. USDC.transferFrom(A → 子合约, grossAmount)<br/>3. child.initialize(params)<br/>4. initialize 中验证签名<br/>🔵 CampaignCreated(child, A, target, reward, deadline)
+    Note over Fac: 1. Clone implementation → 子合约地址<br/>2. USDC.transferFrom(A → 子合约, grossAmount)<br/>3. child.initialize(params)<br/>4. initialize 中验证签名<br/>🔵 SubContractCreated(child)
     Note over P: 平台监听工厂事件<br/>→ 自动注册子合约
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
@@ -343,7 +338,7 @@ flowchart TD
 
 | 操作 | 事件 |
 |------|------|
-| `createCampaign()` | `CampaignCreated(campaign, creator, target, reward, deadline)`（工厂） |
+| `createCampaign()` | `SubContractCreated(child)`（工厂，协议级） |
 | `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
 | `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
 | `onVerificationResult(≤0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
@@ -449,7 +444,7 @@ deadline 到期 + pendingClaims == 0 后：
 | 6 | Clone implementation → 子合约 | — |
 | 7 | `USDC.transferFrom(A → 子合约, grossAmount)` | TransferFailed |
 | 8 | `child.initialize(params)` | — |
-| 9 | Emit CampaignCreated | — |
+| 9 | Emit `SubContractCreated(child)` | — |
 
 ### 9.2 Campaign.initialize
 

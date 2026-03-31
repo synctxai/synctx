@@ -41,7 +41,7 @@ XFollowFactory (developer deploys once)
 - **Clone pattern:** EIP-1167 minimal proxy. All children share implementation bytecode, each has own storage
 - **Gasless:** Factory sets `trustedForwarder` → children inherit → A's createCampaign and B's claim() both gasless via relayer. Gas paid from developer's relayer vault
 - **Lifecycle:** `createCampaign()` → child enters OPEN immediately (no TESTING phase)
-- **Auto-registration:** Factory emits `CampaignCreated(address campaign, address creator)` → platform monitors factory events → auto-discovers and registers child contracts (each implements IDeal)
+- **Auto-registration:** Factory emits `SubContractCreated(address campaign, address creator)` → platform monitors factory events → auto-discovers and registers child contracts (each implements IDeal)
 - **Identity:** `TwitterRegistry` binding mandatory for B
 - **Protocol fee:** Per-claim, from campaign budget → developer's feeCollector
 - **Failure limit:** `MAX_FAILURES = 3` per address per campaign
@@ -67,13 +67,8 @@ contract XFollowFactory {
 
     // ===================== Events =====================
 
-    event CampaignCreated(
-        address indexed campaign,
-        address indexed creator,
-        string target_username,
-        uint96 rewardPerFollow,
-        uint48 deadline
-    );
+    /// @dev Protocol-level event defined in IDeal. Platform monitors this to auto-register child contracts.
+    event SubContractCreated(address indexed subContract);
 
     // ===================== Functions =====================
 
@@ -141,7 +136,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | Method | Caller | Description |
 |--------|--------|-------------|
 | `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | Developer | Deploy factory with all shared config |
-| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_username, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit CampaignCreated. Returns child address |
+| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_username, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
 
 ### 3.2 XFollowCampaign Functions
 
@@ -245,7 +240,7 @@ sequenceDiagram
 
     Note over A: 🟢 USDC.approve(factory, grossAmount)
     A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
-    Note over Fac: 1. Clone implementation → child address<br/>2. USDC.transferFrom(A → child, grossAmount)<br/>3. child.initialize(params)<br/>4. Verify signature in initialize<br/>🔵 CampaignCreated(child, A, target, reward, deadline)
+    Note over Fac: 1. Clone implementation → child address<br/>2. USDC.transferFrom(A → child, grossAmount)<br/>3. child.initialize(params)<br/>4. Verify signature in initialize<br/>🔵 SubContractCreated(child)
     Note over P: Platform monitors factory events<br/>→ auto-register child contract
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
@@ -343,7 +338,7 @@ flowchart TD
 
 | Action | Events |
 |--------|--------|
-| `createCampaign()` | `CampaignCreated(campaign, creator, target, reward, deadline)` (factory) |
+| `createCampaign()` | `SubContractCreated(child)` (factory, protocol-level) |
 | `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
 | `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
 | `onVerificationResult(≤0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
@@ -449,7 +444,7 @@ After deadline + pendingClaims == 0:
 | 6 | Clone implementation → child | — |
 | 7 | `USDC.transferFrom(A → child, grossAmount)` | TransferFailed |
 | 8 | `child.initialize(params)` | — |
-| 9 | Emit CampaignCreated | — |
+| 9 | Emit `SubContractCreated(child)` | — |
 
 ### 9.2 Campaign.initialize
 

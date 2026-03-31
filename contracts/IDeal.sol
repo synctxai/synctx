@@ -91,6 +91,14 @@ interface IDeal {
 
     // ===================== 事件 =====================
 
+    // --- 子合约事件（工厂模式） ---
+
+    /// @notice 工厂合约创建子合约时发出。平台监听此事件自动发现并注册新的 DealContract。
+    /// @dev 仅当合约通过工厂模式生成子合约时需要 emit。子合约必须实现 IDeal 接口。
+    ///      平台收到事件后，调用 subContract 的 supportsInterface() 验证，
+    ///      再读取 name()/description()/tags() 等元数据完成注册。
+    event SubContractCreated(address indexed subContract);
+
     // --- 生命周期事件（由 DealBase 内部辅助函数发出） ---
 
     /// @notice 新交易创建时发出（携带参与方信息，供平台建索引）
