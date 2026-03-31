@@ -46,6 +46,13 @@ DEAL_CONTRACT_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [{"name": "dealIndex", "type": "uint256"}],
+        "name": "dealStatus",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 _w3 = None
@@ -139,3 +146,11 @@ def read_verification_params(deal_contract_addr: str, deal_index: int, verificat
         "sig": sig,
         "spec_params": spec_params,
     }
+
+
+def read_deal_status(deal_contract_addr: str, deal_index: int) -> int:
+    """Read dealStatus from the DealContract (on-chain view call)."""
+    w3, _, _ = _init()
+    addr = Web3.to_checksum_address(deal_contract_addr)
+    deal_obj = w3.eth.contract(address=addr, abi=DEAL_CONTRACT_ABI)
+    return deal_obj.functions.dealStatus(deal_index).call()

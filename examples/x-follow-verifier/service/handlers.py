@@ -10,7 +10,7 @@ from typing import Any
 
 from config import SIGN_DEADLINE_SECONDS, settings
 from signer import sign_verify_request
-from chain import report_result, read_verification_params
+from chain import report_result, read_verification_params, read_deal_status
 from mcp_client import PlatformClient
 from x_follow_spec import decode_spec_params
 from verification import is_following
@@ -35,11 +35,12 @@ async def handle_message(client: PlatformClient, msg: dict) -> None:
         return
 
     action = content.get("action")
+    tag = content.get("tag")
 
     if action == "request_sign":
-        await handle_request_sign(client, sender, content)
+        await handle_request_sign(client, sender, content, tag)
     elif action == "notify_verify":
-        await handle_notify_verify(client, sender, content)
+        await handle_notify_verify(client, sender, content, tag)
     else:
         logger.info("Unknown action '%s', ignoring", action)
 
@@ -48,11 +49,11 @@ async def handle_message(client: PlatformClient, msg: dict) -> None:
 # request_sign: Trader requests an EIP-712 signature (follow)
 # ---------------------------------------------------------------------------
 
-async def handle_request_sign(client: PlatformClient, sender: str, content: dict) -> None:
+async def handle_request_sign(client: PlatformClient, sender: str, content: dict, tag: str | None = None) -> None:
     """Handle a signature request.
 
-    Received: {"action": "request_sign", "params": {"follower_username": "user", "target_username": "target"}, "deadline": 1700000000}
-    Response: {"accepted": true, "fee": 10000, "sig": "0x..."} or {"accepted": false, "reason": "..."}
+    Received: {"action": "request_sign", "params": {"follower_username": "user", "target_username": "target"}, "deadline": 1700000000, "tag": "..."}
+    Response: {"accepted": true, "fee": 10000, "sig": "0x...", "tag": "..."} or {"accepted": false, "reason": "...", "tag": "..."}
     """
     raw_params = content.get("params", {})
     params = json.loads(raw_params) if isinstance(raw_params, str) else raw_params
@@ -61,14 +62,19 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
     follower_username = normalise_username(params.get("follower_username", ""))
     target_username = normalise_username(params.get("target_username", ""))
 
+    async def _reply(resp: dict) -> None:
+        if tag is not None:
+            resp["tag"] = tag
+        await client.send_message(sender, resp)
+
     if not follower_username or not target_username:
         logger.warning("request_sign params incomplete: %s", content)
-        await client.send_message(sender, {"accepted": False, "reason": "Incomplete params, requires follower_username and target_username"})
+        await _reply({"accepted": False, "reason": "Incomplete params, requires follower_username and target_username"})
         return
 
     if not deadline:
         logger.warning("request_sign missing deadline: %s", content)
-        await client.send_message(sender, {"accepted": False, "reason": "Missing deadline"})
+        await _reply({"accepted": False, "reason": "Missing deadline"})
         return
 
     deadline = int(deadline)
@@ -77,17 +83,21 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
     now = int(time.time())
     max_deadline = now + SIGN_DEADLINE_SECONDS
     if deadline > max_deadline:
-        await client.send_message(sender, {
+        await _reply({
             "accepted": False,
             "reason": f"Deadline exceeds acceptable range, maximum accepted is within {SIGN_DEADLINE_SECONDS} seconds",
         })
         return
 
     if deadline <= now:
-        await client.send_message(sender, {"accepted": False, "reason": "Deadline has expired"})
+        await _reply({"accepted": False, "reason": "Deadline has expired"})
         return
 
     fee = settings.verify_fee
+    if fee <= 0:
+        logger.error("verify_fee is configured as %d, refusing to sign", fee)
+        await _reply({"accepted": False, "reason": "Verifier fee must be > 0"})
+        return
 
     try:
         result = sign_verify_request(
@@ -99,30 +109,32 @@ async def handle_request_sign(client: PlatformClient, sender: str, content: dict
 
         sig = result.signature if result.signature.startswith("0x") else f"0x{result.signature}"
 
-        response = {
+        response: dict[str, Any] = {
             "accepted": True,
             "fee": fee,
             "sig": sig,
         }
         logger.info("Signature successful: follower=%s, target=%s, fee=%d, deadline=%d", follower_username, target_username, fee, deadline)
-        await client.send_message(sender, response)
+        await _reply(response)
 
     except Exception as e:
         logger.error("Signature failed: %s", e, exc_info=True)
-        await client.send_message(sender, {"accepted": False, "reason": f"Internal signing error: {e}"})
+        await _reply({"accepted": False, "reason": f"Internal signing error: {e}"})
 
 
 # ---------------------------------------------------------------------------
 # notify_verify: Platform forwards verification notification; read authoritative params from chain then verify
 # ---------------------------------------------------------------------------
 
-async def handle_notify_verify(client: PlatformClient, sender: str, content: dict) -> None:
+async def handle_notify_verify(client: PlatformClient, sender: str, content: dict, tag: str | None = None) -> None:
     """Handle a verification notification.
 
-    Received: {"action": "notify_verify", "dealContract": "0x...", "dealIndex": 5, "verificationIndex": 0}
-    Flow: Read authoritative params from on-chain verificationParams -> off-chain verification -> on-chain reportResult
-    Response: {"action": "result", "dealIndex": 5, "verificationIndex": 0, "result": 1/-1, "txHash": "0x..."}
+    Received: {"action": "notify_verify", "dealContract": "0x...", "dealIndex": 5, "verificationIndex": 0, "tag": "..."}
+    Flow: Check on-chain status → read authoritative params → off-chain verification → on-chain reportResult
+    Response: {"action": "result", "dealIndex": 5, "verificationIndex": 0, "result": 1/-1, "txHash": "0x...", "tag": "..."}
     """
+    VERIFYING_STATUS = 6
+
     deal_contract = content.get("dealContract")
     deal_index = content.get("dealIndex")
     verification_index = content.get("verificationIndex")
@@ -131,7 +143,24 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
         logger.warning("notify_verify missing dealContract / dealIndex / verificationIndex: %s", content)
         return
 
+    async def _reply(resp: dict) -> None:
+        if tag is not None:
+            resp["tag"] = tag
+        await client.send_message(sender, resp)
+
     try:
+        # 0. Check on-chain dealStatus — only proceed if deal is in VERIFYING state
+        status = read_deal_status(deal_contract, int(deal_index))
+        if status != VERIFYING_STATUS:
+            logger.warning("Deal %s is not in VERIFYING state (status=%d), ignoring notification", deal_index, status)
+            await _reply({
+                "action": "result",
+                "dealIndex": deal_index,
+                "verificationIndex": verification_index,
+                "error": f"Deal is not in VERIFYING state (current status={status})",
+            })
+            return
+
         # 1. Read authoritative verification params from on-chain verificationParams
         on_chain = read_verification_params(deal_contract, int(deal_index), int(verification_index))
         on_chain_verifier = on_chain["verifier"].lower()
@@ -174,12 +203,12 @@ async def handle_notify_verify(client: PlatformClient, sender: str, content: dic
             "result": result_code,
             "txHash": tx_hash,
         }
-        await client.send_message(sender, response)
+        await _reply(response)
         logger.info("Verification complete: dealIndex=%s, result=%d, tx=%s", deal_index, result_code, tx_hash)
 
     except Exception as e:
         logger.error("Verification failed: dealIndex=%s, error=%s", deal_index, e, exc_info=True)
-        await client.send_message(sender, {
+        await _reply({
             "action": "result",
             "dealIndex": deal_index,
             "verificationIndex": verification_index,
