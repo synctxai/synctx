@@ -17,7 +17,7 @@ XFollowDealContract is a concrete DealContract implementation for the **"A pays 
 - **Verification semantics:** Verifier checks whether the follow relationship exists at verification time. Identity is guaranteed by TwitterRegistry (wallet ↔ username), eliminating impersonation risk
 - **Off-chain verification:** Dual-provider parallel check via twitterapi.io (`check_follow_relationship`) + twitter-api45 (`checkfollow.php`)
 - **End conditions:** Budget exhausted OR deadline reached — A cannot close early
-- **Unified deadline:** Campaign deadline is used as both the verifier signature expiry and the campaign end time
+- **Deadline constraint:** Verifier signature deadline must be ≥ campaign deadline (`sigDeadline >= campaignDeadline`), ensuring the verifier's commitment covers the entire campaign. Checked at `createDeal`
 
 ---
 
@@ -29,7 +29,7 @@ XFollowDealContract is a concrete DealContract implementation for the **"A pays 
 struct Deal {
     // Slot 1
     address partyA;              // 20 bytes — campaign creator
-    uint48  deadline;            // 6 bytes  — campaign end time = signature deadline
+    uint48  deadline;            // 6 bytes  — campaign end time (Unix seconds)
     uint8   status;              // 1 byte   — OPEN / CLOSED
     // Slot 2
     address verifier;            // 20 bytes — verifier contract address
@@ -39,9 +39,11 @@ struct Deal {
     uint96  verifierFee;         // 12 bytes — fee per verification (paid from budget)
     uint32  pendingClaims;       // 4 bytes  — claims awaiting verification
     uint32  completedClaims;     // 4 bytes  — successfully verified claims
+    // Slot 4
+    uint256 signatureDeadline;   // verifier signature expiry (must be >= deadline)
     // Dynamic
     string  target_username;     // canonicalized: no @, lowercase
-    bytes   verifierSignature;   // EIP-712 signature (deadline = deal.deadline)
+    bytes   verifierSignature;   // EIP-712 signature
 }
 ```
 
@@ -76,7 +78,7 @@ mapping(uint256 => uint256) nextClaimIndex;
 
 | Method | Parameters | Caller | Description |
 |--------|------------|--------|-------------|
-| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, bytes sig, string target_username, uint48 deadline` | A | Create campaign. Deposit `grossAmount` USDC (= protocolFee + budget). `deadline` serves as both campaign end time and verifier signature expiry |
+| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A | Create campaign. Deposit `grossAmount` USDC (= protocolFee + budget). Requires `sigDeadline >= deadline` (verifier commitment must cover the campaign) |
 | `claim(dealIndex)` | `uint256 dealIndex` | Any B | B calls with only `dealIndex`. Contract reads `TwitterRegistry.usernameOf[msg.sender]` — reverts `NotVerified` if unbound. Locks (rewardPerFollow + verifierFee) from budget. Emits VerificationRequested |
 | `onVerificationResult(...)` | `uint256 dealIndex, uint256 claimIndex, int8 result, string reason` | Verifier | result>0 → pay B, completedClaims++; result<0 → reward to budget, mark failure on B; result==0 → all to budget |
 | `withdrawRemaining(dealIndex)` | `uint256 dealIndex` | A | After deadline + pendingClaims==0, A withdraws remaining budget. Deal → CLOSED |
@@ -123,9 +125,7 @@ TYPEHASH:
 Verify(string targetUsername,uint256 fee,uint256 deadline)
 ```
 
-The verifier signs once per campaign. `deadline` = campaign deadline, serving double duty:
-- Verifier commitment expiry (standard EIP-712 deadline)
-- Campaign end time (no new claims after this time)
+The verifier signs once per campaign. The `deadline` in the signature is the verifier's own commitment expiry. At `createDeal`, the contract checks `sigDeadline >= campaignDeadline` — ensuring the verifier's commitment covers the entire campaign duration.
 
 ### 4.3 specParams (per-claim)
 
@@ -341,7 +341,7 @@ EXHAUSTED → claim rejected → budget += rewardPerFollow → OPEN (if budget �
 | Failure tracking | Failed claims increment `failCount[dealIndex][B]` — visible via `failures()` |
 | Identity required | TwitterRegistry binding mandatory — `claim()` reverts if unbound |
 | One claim per user | `hasClaimed` mapping prevents double claims |
-| Unified deadline | Campaign deadline = verifier signature deadline — one parameter, no mismatch |
+| Deadline constraint | `sigDeadline >= campaignDeadline` — verifier commitment must cover the campaign |
 
 ---
 
@@ -393,8 +393,9 @@ After deadline + all claims resolved:
 | 4 | `deadline > block.timestamp` | InvalidParams |
 | 5 | `verifier != address(0)`, is contract | VerifierNotContract |
 | 6 | `target_username` non-empty after canonicalization | InvalidParams |
-| 7 | Verifier spec match + EIP-712 signature valid (deadline = campaign deadline) | InvalidVerifierSignature |
-| 8 | `USDC.transferFrom(A, contract, grossAmount)` | TransferFailed |
+| 7 | `sigDeadline >= deadline` (verifier commitment covers campaign) | SignatureExpired |
+| 8 | Verifier spec match + EIP-712 signature valid | InvalidVerifierSignature |
+| 9 | `USDC.transferFrom(A, contract, grossAmount)` | TransferFailed |
 
 ### 9.2 claim Validations
 
