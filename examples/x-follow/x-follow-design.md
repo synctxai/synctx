@@ -77,7 +77,7 @@ mapping(address => uint8) public failCount;    // failed attempts; >= MAX_FAILUR
 | Method | Parameters | Caller | Description |
 |--------|------------|--------|-------------|
 | `constructor(...)` | `address feeCollector, uint96 protocolFee, address requiredSpec, address twitterRegistry` | Deploy | Set immutables |
-| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A (once) | Initialize campaign in TESTING status. `grossAmount` deposited as budget. Can only be called once |
+| `createDeal(...)` | `uint96 grossAmount, address verifier, uint96 verifierFee, uint96 rewardPerFollow, uint256 sigDeadline, bytes sig, string target_username, uint48 deadline` | A (once) | Initialize campaign in TESTING status. `grossAmount` deposited as budget. Returns 0 (campaign-level, not a dealIndex). Can only be called once |
 | `updateParams(...)` | `uint96 rewardPerFollow, uint96 verifierFee, uint48 deadline, string target_username` | A | Modify campaign params. Only in TESTING. Requires new verifier signature if params change |
 | `addBudget(uint96 amount)` | `uint96 amount` | A | Add USDC to budget. Only in TESTING |
 | `removeBudget(uint96 amount)` | `uint96 amount` | A | Withdraw USDC from budget. Only in TESTING |
@@ -167,8 +167,8 @@ Verifier Service receives notify_verify (dealIndex = claim, verificationIndex = 
   │     └── twitter-api45: checkfollow.php
   ├── 3. Merge logic:
   │     ├── ANY confirms follow → result = 1 (pass)
-  │     ├── Both deny → retry once after 5s → result = -1 or 1
-  │     └── Both error → result = 0 (inconclusive)
+  │     ├── Not following → retry once after 5s → result = -1 or 1
+  │     └── Both providers error → result = 0 (inconclusive)
   └── 4. reportResult(dealContract, dealIndex, 0, result, reason, expectedFee)
 ```
 
@@ -377,6 +377,7 @@ otherwise                → eligible
 |----------|-------|-------------|
 | `VERIFICATION_TIMEOUT` | 30 minutes | Per-claim verifier response limit |
 | `MAX_FAILURES` | 3 | Max failed claims per address |
+| `MIN_PROTOCOL_FEE` | 10,000 (0.01 USDC) | Minimum protocol fee at deployment |
 
 ### 7.2 Verifier Timeout on a Claim
 

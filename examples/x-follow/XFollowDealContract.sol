@@ -66,6 +66,10 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     uint8 constant OPEN                 = 1;
     uint8 constant CLOSED               = 2;
 
+    // ===================== 事件 =====================
+
+    event CampaignActivated();
+
     // ===================== 类型 =====================
 
     struct Claim {
@@ -231,6 +235,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (budget < _claimCost()) revert InsufficientBudget();
         if (signatureDeadline < deadline) revert SignatureExpired();
         campaignStatus = OPEN;
+        emit CampaignActivated();
     }
 
     // ===================== Claim（每个 claim = 一个 dealIndex） =====================
