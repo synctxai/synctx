@@ -1,0 +1,17 @@
+{
+  "status": {
+    "0":   { "label": "Waiting Accept",      "icon": "hourglass",       "color": "blue" },
+    "1":   { "label": "Active",              "icon": "pulse",           "color": "green" },
+    "2":   { "label": "Verifying",           "icon": "search",          "color": "blue" },
+    "3":   { "label": "Settling",            "icon": "scale",           "color": "blue" },
+    "4":   { "label": "Completed",           "icon": "checkmark",       "color": "green" },
+    "5":   { "label": "Cancelled",           "icon": "slash",           "color": "gray" },
+    "6":   { "label": "Unwound",             "icon": "undo",            "color": "gray" },
+    "7":   { "label": "Accept Timed Out",    "icon": "hourglass_error", "color": "red" },
+    "8":   { "label": "Expired",             "icon": "calendar",        "color": "orange" },
+    "9":   { "label": "Verifier Timed Out",  "icon": "search_error",    "color": "red" },
+    "10":  { "label": "Settlement Proposed", "icon": "scale",           "color": "orange" },
+    "11":  { "label": "Settlement Timed Out","icon": "scale_error",     "color": "red" },
+    "255": { "label": "Not Found",           "icon": "question",        "color": "gray" }
+  }
+}

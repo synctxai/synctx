@@ -1,0 +1,11 @@
+{
+  "status": {
+    "0":   { "label": "Verifying",           "icon": "search",       "color": "blue" },
+    "1":   { "label": "Verifier Timed Out",  "icon": "search_error", "color": "red" },
+    "2":   { "label": "Completed",           "icon": "checkmark",    "color": "green" },
+    "3":   { "label": "Rejected",            "icon": "error",        "color": "red" },
+    "4":   { "label": "Timed Out",           "icon": "clock",        "color": "red" },
+    "5":   { "label": "Inconclusive",        "icon": "minus",        "color": "orange" },
+    "255": { "label": "Not Found",           "icon": "question",     "color": "gray" }
+  }
+}

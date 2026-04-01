@@ -1,0 +1,6 @@
+{
+  "status": {
+    "1":   { "label": "Created",   "icon": "plus",     "color": "blue" },
+    "255": { "label": "Not Found", "icon": "question",  "color": "gray" }
+  }
+}
