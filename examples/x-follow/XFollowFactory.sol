@@ -12,7 +12,7 @@ import "./XFollowCampaign.sol";
 
 
 /// @title XFollowFactory - X 付费关注 Campaign 工厂合约
-/// @notice Developer 部署此合约。A 通过 createCampaign() 创建 XFollowCampaign clone。
+/// @notice Developer 部署此合约。A 通过 createDeal() 创建 XFollowCampaign clone。
 ///         每个 clone 是独立的 campaign，参数创建时锁定。
 /// @dev Factory 的 dealIndex 计数 campaign 数量。
 ///      子合约的 dealIndex 计数 claim 数量。
@@ -89,7 +89,7 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
     /// @param target_user_id_ 目标 Twitter user_id
     /// @param deadline_ Campaign 截止时间
     /// @return campaign 新创建的 XFollowCampaign 地址
-    function createCampaign(
+    function createDeal(
         uint96  grossAmount,
         address verifier_,
         uint96  verifierFee_,
@@ -212,11 +212,11 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
             "Deploy X Follow Campaigns via EIP-1167 clone pattern.\n\n"
             "## For Campaign Creators (A)\n\n"
             "1. Choose a Verifier and negotiate terms (request_sign)\n"
-            "2. Call `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)`\n"
+            "2. Call `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)`\n"
             "3. USDC is transferred from your wallet to the new campaign contract\n"
-            "4. Campaign goes live immediately — followers can claim rewards\n\n"
+            "4. Campaign goes live immediately -- followers can claim rewards\n\n"
             "## Gasless\n\n"
-            "Both createCampaign (A) and claim (B) support ERC2771 meta-transactions.\n"
+            "Both createDeal (A) and claim (B) support ERC2771 meta-transactions.\n"
             "Gas is sponsored by the Developer via GasSponsorVault.\n";
     }
 }
