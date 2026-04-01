@@ -5,18 +5,17 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./XFollowVerifierSpec.sol";
 import "./IERC20.sol";
-import "./Initializable.sol";
 import "./ERC2771Mixin.sol";
 import "./BindingAttestation.sol";
 
 
-/// @title XFollowDealContract - X 付费关注 Campaign 合约
-/// @notice 合约即 campaign。A 存入预算，任何通过 Binding Attestation 认证的用户可关注后领取固定奖励。
+/// @title XFollowCampaign - X 付费关注 Campaign 子合约
+/// @notice 由 XFollowFactory 通过 EIP-1167 clone 创建。每个实例 = 一个 campaign。
+///         A 存入预算，任何通过 Binding Attestation 认证的用户可关注后领取固定奖励。
 ///         每个 B 的 claim() 创建一个新的 dealIndex。全自动，无需协商。
 /// @dev 生命周期：OPEN → CLOSED
-///      OPEN：createDeal() 成功后立即生效，接受 claim
-///      CLOSED：不接受新 claim（deadline 到期或预算耗尽自动触发）
-contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
+///      无 constructor — 所有状态通过 initialize() 一次性设置（clone 兼容）。
+contract XFollowCampaign is DealBase, ERC2771Mixin {
 
     // ===================== 错误 =====================
 
@@ -33,7 +32,6 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     error BudgetExhausted();
     error AlreadyClaimed();
     error MaxFailures();
-    error NotVerified();
     error InvalidBindingSignature();
     error PendingClaim();
     error NotClosed();
@@ -43,22 +41,31 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     error VerificationTimedOut();
     error InvalidVerificationIndex();
     error InsufficientBudget();
+    error AlreadyInitialized();
+    error Reentrancy();
+
+    // ===================== 事件 =====================
+
+    /// @notice Verifier 超时事件，供平台索引 verifier 可靠性
+    event VerifierTimeout(uint256 indexed dealIndex, address indexed verifier);
 
     // ===================== dealStatus 常量（per-claim） =====================
     //
-    //   存储基础值          dealStatus 派生值
-    //   ─────────────       ──────────────────
-    //   VERIFYING      (0)  → VERIFIER_TIMED_OUT (1)
-    //   COMPLETED      (2)
-    //   REJECTED       (3)
-    //   TIMED_OUT      (4)
-    //   NOT_FOUND     (255)
+    //   存储基础值            dealStatus 派生值
+    //   ─────────────         ──────────────────
+    //   VERIFYING        (0)  → VERIFIER_TIMED_OUT (1)
+    //   COMPLETED        (2)
+    //   REJECTED         (3)
+    //   TIMED_OUT        (4)
+    //   INCONCLUSIVE     (5)
+    //   NOT_FOUND       (255)
 
     uint8 constant VERIFYING            = 0;
     uint8 constant VERIFIER_TIMED_OUT   = 1;
     uint8 constant COMPLETED            = 2;
     uint8 constant REJECTED             = 3;
     uint8 constant TIMED_OUT            = 4;
+    uint8 constant INCONCLUSIVE         = 5;
     uint8 constant NOT_FOUND            = 255;
 
     // ===================== campaignStatus 常量 =====================
@@ -71,20 +78,27 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     struct Claim {
         address claimer;             // B 的地址
         uint48  timestamp;           // claim 创建时间
-        uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT
+        uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT / INCONCLUSIVE
         uint64  follower_user_id;    // claim 时通过 Binding Attestation 验证
     }
 
     // ===================== 常量 =====================
 
-    uint96 public constant MIN_PROTOCOL_FEE = 10_000;
     uint256 public constant VERIFICATION_TIMEOUT = 30 minutes;
     uint8 public constant MAX_FAILURES = 3;
 
-    address public immutable FEE_COLLECTOR;
-    uint96 public immutable PROTOCOL_FEE;
-    address public immutable REQUIRED_SPEC;
-    BindingAttestation public immutable BINDING_ATTESTATION;
+    // ===================== 初始化守卫 & 重入锁 =====================
+
+    bool private _initialized;
+    uint256 private _lock;
+
+    // ===================== Config（由 factory 在 initialize 时传入） =====================
+
+    address public feeToken;
+    address public feeCollector;
+    uint96  public protocolFee;
+    address public requiredSpec;
+    BindingAttestation public bindingAttestation;
 
     // ===================== Campaign 存储 =====================
 
@@ -100,6 +114,9 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     uint256 public signatureDeadline;
     uint64  public target_user_id;
     bytes   public verifierSignature;
+
+    /// @notice Verifier 超时次数（链上信用信号）
+    uint32  public verifierTimeoutCount;
 
     // ===================== Per-Claim 存储 =====================
 
@@ -120,67 +137,71 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         _;
     }
 
-    // ===================== 构造函数 =====================
-
-    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address bindingAttestation) {
-        _setInitializer();
-        if (feeCollector == address(0) || feeCollector == address(this) || feeCollector.code.length == 0) {
-            revert InvalidParams();
-        }
-        if (protocolFee_ < MIN_PROTOCOL_FEE) revert InvalidParams();
-        if (requiredSpec == address(0)) revert InvalidSpecAddress();
-        if (bindingAttestation == address(0) || bindingAttestation.code.length == 0) revert InvalidParams();
-        FEE_COLLECTOR = feeCollector;
-        PROTOCOL_FEE = protocolFee_;
-        REQUIRED_SPEC = requiredSpec;
-        BINDING_ATTESTATION = BindingAttestation(bindingAttestation);
+    modifier nonReentrant() {
+        if (_lock == 1) revert Reentrancy();
+        _lock = 1;
+        _;
+        _lock = 0;
     }
 
-    // ===================== Campaign 设置 =====================
+    // ===================== 初始化（替代 constructor，clone 兼容） =====================
 
-    /// @notice 创建 campaign（仅一次），成功后立即进入 OPEN
-    function createDeal(
-        uint96  grossAmount,
+    /// @notice 由 XFollowFactory 在 clone 后原子调用，一次性初始化所有参数
+    function initialize(
+        address feeToken_,
+        address feeCollector_,
+        uint96  protocolFee_,
+        address requiredSpec_,
+        address bindingAttestation_,
+        address trustedForwarder_,
+        address partyA_,
         address verifier_,
-        uint96  verifierFee_,
         uint96  rewardPerFollow_,
-        uint256 sigDeadline,
-        bytes calldata sig,
+        uint96  verifierFee_,
+        uint48  deadline_,
+        uint96  grossAmount_,
         uint64  target_user_id_,
-        uint48  deadline_
-    ) external returns (uint256) {
-        if (partyA != address(0)) revert AlreadyInitialized();
-        address sender = _msgSender();
+        uint256 sigDeadline_,
+        bytes calldata sig_
+    ) external {
+        if (_initialized) revert AlreadyInitialized();
+        _initialized = true;
 
+        // ERC2771 初始化（forwarder 不可变更，admin = address(0)）
+        _initForwarder(trustedForwarder_, address(0));
+
+        // Config
+        feeToken = feeToken_;
+        feeCollector = feeCollector_;
+        protocolFee = protocolFee_;
+        requiredSpec = requiredSpec_;
+        bindingAttestation = BindingAttestation(bindingAttestation_);
+
+        // Campaign 参数验证
         if (rewardPerFollow_ == 0) revert InvalidParams();
         if (deadline_ <= block.timestamp) revert InvalidParams();
         if (verifier_ == address(0)) revert InvalidParams();
-        if (sender == verifier_) revert InvalidParams();
+        if (partyA_ == verifier_) revert InvalidParams();
         if (verifier_.code.length == 0) revert VerifierNotContract();
-        if (sig.length == 0) revert InvalidVerifierSignature();
-        if (sigDeadline < deadline_) revert SignatureExpired();
-        if (grossAmount < rewardPerFollow_ + verifierFee_ + PROTOCOL_FEE) revert InsufficientBudget();
-
+        if (sig_.length == 0) revert InvalidVerifierSignature();
+        if (sigDeadline_ < deadline_) revert SignatureExpired();
+        if (grossAmount_ < rewardPerFollow_ + verifierFee_ + protocolFee_) revert InsufficientBudget();
         if (target_user_id_ == 0) revert InvalidParams();
 
-        _verifyVerifierSignature(verifier_, target_user_id_, verifierFee_, sigDeadline, sig);
+        // 验证 Verifier 签名
+        _verifyVerifierSignature(verifier_, target_user_id_, verifierFee_, sigDeadline_, sig_);
 
-        // USDC 转入
-        if (!IERC20(feeToken).transferFrom(sender, address(this), grossAmount)) revert TransferFailed();
-
-        // 设置 campaign
-        partyA = sender;
+        // 设置 campaign（USDC 已由 factory transferFrom 到本合约）
+        partyA = partyA_;
         campaignStatus = OPEN;
         verifier = verifier_;
         rewardPerFollow = rewardPerFollow_;
         verifierFee = verifierFee_;
         deadline = deadline_;
-        budget = grossAmount;
-        signatureDeadline = sigDeadline;
+        budget = grossAmount_;
+        signatureDeadline = sigDeadline_;
         target_user_id = target_user_id_;
-        verifierSignature = sig;
-
-        return 0; // campaign 本身不需要 dealIndex
+        verifierSignature = sig_;
     }
 
     // ===================== Claim（每个 claim = 一个 dealIndex） =====================
@@ -188,7 +209,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @notice B 领取关注奖励。提交 Binding Attestation 证明身份。
     /// @param userId B 的 Twitter immutable user_id
     /// @param bindingSig Platform 签发的绑定证明签名
-    function claim(uint64 userId, bytes calldata bindingSig) external returns (uint256 dealIndex) {
+    function claim(uint64 userId, bytes calldata bindingSig) external nonReentrant returns (uint256 dealIndex) {
         // 检查并可能触发 auto-close
         _checkAndClose();
         if (campaignStatus != OPEN) revert CampaignNotOpen();
@@ -201,7 +222,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (_hasPendingClaim(sender)) revert PendingClaim();
 
         // 验证 Binding Attestation
-        if (!BINDING_ATTESTATION.verify(sender, userId, bindingSig)) revert InvalidBindingSignature();
+        if (!bindingAttestation.verify(sender, userId, bindingSig)) revert InvalidBindingSignature();
         uint64 followerUserId = userId;
 
         uint96 cost = _claimCost();
@@ -244,7 +265,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     /// @notice Verifier 提交验证结果
     function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata /* reason */)
-        external override onlySlot0(verificationIndex)
+        external override onlySlot0(verificationIndex) nonReentrant
     {
         if (msg.sender != verifier) revert NotVerifier();
         Claim storage c = claims[dealIndex];
@@ -253,7 +274,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
         uint96 reward = rewardPerFollow;
         uint96 vFee = verifierFee;
-        uint96 pFee = PROTOCOL_FEE;
+        uint96 pFee = protocolFee;
         address claimer = c.claimer;
 
         pendingClaims--;
@@ -274,13 +295,13 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
             if (vFee > 0) {
                 if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
             }
-            if (!IERC20(feeToken).transfer(FEE_COLLECTOR, pFee)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(feeCollector, pFee)) revert TransferFailed();
 
         } else if (result < 0) {
-            // 失败：奖励退回预算，verifier + protocol 照付
+            // 失败：reward + protocolFee 退回预算，仅 verifierFee 付出
             c.status = REJECTED;
             failCount[claimer]++;
-            budget += reward;
+            budget += reward + pFee;
 
             _emitStateChanged(dealIndex, REJECTED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
@@ -288,14 +309,13 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
             if (vFee > 0) {
                 if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
             }
-            if (!IERC20(feeToken).transfer(FEE_COLLECTOR, pFee)) revert TransferFailed();
 
         } else {
-            // 不确定：全额退回预算
-            c.status = REJECTED;
+            // 不确定：全额退回预算，不扣费
+            c.status = INCONCLUSIVE;
             budget += reward + vFee + pFee;
 
-            _emitStateChanged(dealIndex, REJECTED);
+            _emitStateChanged(dealIndex, INCONCLUSIVE);
             _emitPhaseChanged(dealIndex, 4); // → Failed
         }
 
@@ -307,7 +327,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     /// @notice Verifier 超时后重置 claim，全额退回预算
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
-        external onlySlot0(verificationIndex)
+        external onlySlot0(verificationIndex) nonReentrant
     {
         Claim storage c = claims[dealIndex];
         if (c.status != VERIFYING) revert InvalidStatus();
@@ -317,7 +337,9 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         pendingClaims--;
         delete pendingClaimIndex[c.claimer];
         budget += _claimCost();
+        verifierTimeoutCount++;
 
+        emit VerifierTimeout(dealIndex, verifier);
         _emitStateChanged(dealIndex, TIMED_OUT);
         _emitPhaseChanged(dealIndex, 4); // → Failed
 
@@ -327,7 +349,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     // ===================== Campaign 结束 =====================
 
     /// @notice CLOSED 且无 pending 时，A 提取剩余预算
-    function withdrawRemaining() external onlyA {
+    function withdrawRemaining() external onlyA nonReentrant {
         if (campaignStatus != CLOSED) revert NotClosed();
         if (pendingClaims > 0) revert PendingClaims();
         if (budget == 0) revert NoFunds();
@@ -340,7 +362,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     // ===================== 内部辅助函数 =====================
 
     function _claimCost() internal view returns (uint96) {
-        return rewardPerFollow + verifierFee + PROTOCOL_FEE;
+        return rewardPerFollow + verifierFee + protocolFee;
     }
 
     function _checkAndClose() internal {
@@ -369,7 +391,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         bytes calldata sig
     ) internal view {
         address verifierSpec = IVerifier(verifier_).spec();
-        if (verifierSpec != REQUIRED_SPEC) revert InvalidSpecAddress();
+        if (verifierSpec != requiredSpec) revert InvalidSpecAddress();
         address recovered = XFollowVerifierSpec(verifierSpec).check(
             verifier_, targetUserId, uint256(fee), sigDeadline, sig
         );
@@ -409,7 +431,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     // ===================== IDeal 实现 =====================
 
     function name() external pure override returns (string memory) {
-        return "X Follow Deal";
+        return "X Follow Campaign";
     }
 
     function description() external pure override returns (string memory) {
@@ -424,20 +446,20 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function version() external pure override returns (string memory) {
-        return "4.0";
+        return "5.0";
     }
 
     function protocolFeePolicy() external pure override returns (string memory) {
         return
-            "Per-claim protocol fee deducted from campaign budget. "
+            "Per-claim protocol fee deducted from campaign budget on successful claims only. "
             "claimCost = rewardPerFollow + verifierFee + protocolFee. "
-            "No upfront fee at campaign creation. "
+            "Failed claims: only verifierFee deducted. Inconclusive: full refund. "
             "Query exact value via claimCost().";
     }
 
     function requiredSpecs() external view override returns (address[] memory) {
         address[] memory specs = new address[](1);
-        specs[0] = REQUIRED_SPEC;
+        specs[0] = requiredSpec;
         return specs;
     }
 
@@ -463,7 +485,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (c.claimer == address(0)) return 0; // NotFound
         if (c.status == VERIFYING) return 2;   // Active
         if (c.status == COMPLETED) return 3;   // Success
-        return 4;                               // Failed
+        return 4;                               // Failed (REJECTED / TIMED_OUT / INCONCLUSIVE)
     }
 
     /// @notice 业务级状态码（per-claim，含派生状态）
@@ -486,11 +508,11 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     function instruction() external view override returns (string memory) {
         return
-            "# X Follow Deal (Campaign)\n\n"
+            "# X Follow Campaign\n\n"
             "Pay fixed USDC reward per follow to a target account on X. 1-to-many campaign model.\n\n"
             "## Campaign Lifecycle\n\n"
             "OPEN -> CLOSED\n\n"
-            "- **OPEN**: Campaign goes live immediately after createDeal(). Params are locked, anyone with Binding Attestation can claim().\n"
+            "- **OPEN**: Campaign goes live immediately after initialization. Params are locked, anyone with Binding Attestation can claim().\n"
             "- **CLOSED**: Auto-triggered on deadline or budget exhaustion. A calls withdrawRemaining().\n\n"
             "## For Followers (B)\n\n"
             "1. Complete Twitter verification on Platform to get Binding Attestation\n"
@@ -500,6 +522,10 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
             "## Costs\n\n"
             "B pays nothing. All fees (reward + verifierFee + protocolFee) come from A's budget.\n"
             "Query `claimCost()` for per-claim cost, `remainingSlots()` for available claims.\n\n"
+            "## Fee Policy\n\n"
+            "- Successful claim: reward to B, verifierFee to Verifier, protocolFee to Developer.\n"
+            "- Failed claim (not following): only verifierFee deducted, reward + protocolFee refunded to budget.\n"
+            "- Inconclusive (API error): full refund to budget.\n\n"
             "## Failure Policy\n\n"
             "Failed claims (not following) increment failCount. After 3 failures, banned from this campaign.\n"
             "Inconclusive results (API errors) do not count as failures.\n";

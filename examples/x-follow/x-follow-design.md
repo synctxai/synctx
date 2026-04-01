@@ -45,6 +45,7 @@ XFollowFactory (developer deploys once)
 - **Identity:** Binding Attestation (platformSigner verification) mandatory for B
 - **Protocol fee:** Per-claim, from campaign budget → developer's feeCollector
 - **Failure limit:** `MAX_FAILURES = 3` per address per campaign
+- **ReentrancyGuard:** `claim()`, `onVerificationResult()`, `resetVerification()`, `withdrawRemaining()` all have `nonReentrant` modifier (custom reentrancy guard using `_lock` pattern)
 
 ---
 
@@ -80,7 +81,7 @@ contract XFollowFactory is DealBase {
         uint96  rewardPerFollow,
         uint256 sigDeadline,
         bytes calldata sig,
-        string calldata target_username,
+        uint64  target_user_id,
         uint48  deadline
     ) external returns (address campaign);
 }
@@ -103,21 +104,22 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     uint32  public pendingClaims;
     uint32  public completedClaims;
     uint256 public signatureDeadline;
-    string  public target_username;
+    uint64  public target_user_id;
     bytes   public verifierSignature;
     bool    public closed;               // true = CLOSED
+    uint32  public verifierTimeoutCount;
 
-    // ===================== Read from factory =====================
+    // ===================== Passed from factory, stored in campaign =====================
 
     // FEE_COLLECTOR, PROTOCOL_FEE, REQUIRED_SPEC, PLATFORM_SIGNER, feeToken
-    // all read from factory at runtime (not stored in child, saves clone storage)
+    // passed from factory during initialize() and stored in campaign storage
 
     // ===================== Per-Claim =====================
 
     struct Claim {
         address claimer;
         uint48  timestamp;
-        uint8   status;              // VERIFYING(0) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4)
+        uint8   status;              // VERIFYING(0) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4) / INCONCLUSIVE(5)
         string  follower_username;
     }
 
@@ -136,7 +138,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | Method | Caller | Description |
 |--------|--------|-------------|
 | `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | Developer | Deploy factory with all shared config |
-| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_username, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
+| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
 
 ### 3.2 XFollowCampaign Functions
 
@@ -145,7 +147,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | `initialize(...)` | Factory only | Set campaign params and enter OPEN immediately. Can only be called once, only by factory |
 | `claim(userId, bindingSig)` | Any B (gasless) | Verify Binding Attestation. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → pay B; result<0 → reward to budget, failCount++; result==0 → all to budget |
-| `resetVerification(dealIndex, 0)` | Anyone | After VERIFICATION_TIMEOUT. Full claimCost returns to budget |
+| `resetVerification(dealIndex, 0)` | Anyone | After VERIFICATION_TIMEOUT. Full claimCost returns to budget. verifierTimeoutCount++, emit VerifierTimeout event |
 | `withdrawRemaining()` | A | Only when CLOSED + pendingClaims==0. Budget → A |
 
 ### 3.3 Query Functions
@@ -154,7 +156,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 |--------|--------|-------------|
 | `claimCost()` | `uint96` | rewardPerFollow + verifierFee + PROTOCOL_FEE |
 | `campaignStatus()` | `uint8` | OPEN(0) / CLOSED(1) — derived from `closed` flag + deadline + budget |
-| `dealStatus(dealIndex)` | `uint8` | Per-claim: VERIFYING(0) / VERIFIER_TIMED_OUT(1) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4) / NOT_FOUND(255) |
+| `dealStatus(dealIndex)` | `uint8` | Per-claim: VERIFYING(0) / VERIFIER_TIMED_OUT(1) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4) / INCONCLUSIVE(5) / NOT_FOUND(255) |
 | `canClaim(addr)` | `bool` | Whether addr can claim |
 | `failures(addr)` | `uint8` | Failed count |
 | `remainingSlots()` | `uint256` | budget / claimCost |
@@ -166,10 +168,10 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | `name()` | `"X Follow Campaign"` |
 | `description()` | Campaign description |
 | `tags()` | `["x", "follow"]` |
-| `version()` | `"3.0"` |
+| `version()` | `"5.0"` |
 | `instruction()` | Markdown guide for A and B |
 | `requiredSpecs()` | `[REQUIRED_SPEC]` (read from factory) |
-| `verificationParams(dealIndex, 0)` | specParams = abi.encode(follower_username, target_username) |
+| `verificationParams(dealIndex, 0)` | specParams = abi.encode(uint64 follower_user_id, uint64 target_user_id) |
 | `requestVerification(dealIndex, 0)` | Always reverts — auto-triggered by claim() |
 | `phase(dealIndex)` | 0=NotFound, 2=Active, 3=Success, 4=Failed |
 | `dealExists(dealIndex)` | Whether claim exists |
@@ -182,7 +184,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
 TYPEHASH:
 ```
-Verify(string targetUsername,uint256 fee,uint256 deadline)
+Verify(uint64 targetUserId,uint256 fee,uint256 deadline)
 ```
 
 A requests signature from verifier before calling `createCampaign()`. Factory passes the signature to the child's `initialize()`, which validates it.
@@ -194,7 +196,7 @@ Constraint: `sigDeadline >= campaignDeadline`.
 ```solidity
 specParams = abi.encode(
     uint64 follower_user_id,   // from Binding Attestation (claim parameter)
-    string target_username     // from campaign config
+    uint64 target_user_id      // from campaign config
 )
 ```
 
@@ -234,13 +236,13 @@ sequenceDiagram
 
     Note over A,Fac: Campaign Creation (gasless via relayer)
 
-    A->>P: 🟣 request_sign(verifier, {target_username}, deadline)
+    A->>P: 🟣 request_sign(verifier, {target_user_id}, deadline)
     P-->>V: async message
     V->>P: reply {accepted, fee, sig}
     P-->>A: async message
 
     Note over A: 🟢 USDC.approve(factory, grossAmount)
-    A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
+    A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_user_id, deadline)
     Note over Fac: 1. Clone implementation → child address<br/>2. USDC.transferFrom(A → child, grossAmount)<br/>3. child.initialize(params)<br/>4. Verify signature in initialize<br/>🔵 SubContractCreated(child)
     Note over P: Platform monitors factory events<br/>→ auto-register child contract
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
@@ -248,7 +250,7 @@ sequenceDiagram
     Note over B,C: Claim Phase (gasless via relayer)
 
     Note over B: 1. Complete Twitter verification, get Binding Attestation
-    Note over B: 2. Follow target_username on X
+    Note over B: 2. Follow target_user_id on X
     B->>C: 🟡 canClaim(B.address) → true
     B->>C: 🟢 claim() → dealIndex
     Note over C: Read R.usernameOf[B] → revert if empty<br/>Lock claimCost from budget<br/>🔵 DealCreated(dealIndex, [B], [verifier])<br/>🔵 VerificationRequested(dealIndex, 0, verifier)
@@ -263,7 +265,7 @@ sequenceDiagram
     alt result > 0 — following
         Note over C: reward → B, verifierFee → V<br/>protocolFee → developer's FeeCollector<br/>🔵 DealPhaseChanged(dealIndex, 3)
     else result < 0 — not following
-        Note over C: reward → budget, verifierFee → V<br/>protocolFee → FeeCollector, failCount[B]++<br/>🔵 DealPhaseChanged(dealIndex, 4)
+        Note over C: reward → budget, verifierFee → V<br/>protocolFee → budget, failCount[B]++<br/>🔵 DealPhaseChanged(dealIndex, 4)
     else result == 0 — inconclusive
         Note over C: claimCost → budget<br/>🔵 DealPhaseChanged(dealIndex, 4)
     end
@@ -295,8 +297,9 @@ sequenceDiagram
 | 0 | VERIFYING | Stored | Awaiting verifier |
 | 1 | VERIFIER_TIMED_OUT | Derived | Past VERIFICATION_TIMEOUT. `reportResult()` is no longer accepted; use `resetVerification()` |
 | 2 | COMPLETED | Stored | B paid |
-| 3 | REJECTED | Stored | Not following or inconclusive, reward returned |
+| 3 | REJECTED | Stored | Not following, reward returned |
 | 4 | TIMED_OUT | Stored | After resetVerification, claimCost returned |
+| 5 | INCONCLUSIVE | Stored | Inconclusive result, full refund |
 | 255 | NOT_FOUND | — | Claim does not exist |
 
 ### 6.3 Per-Claim `phase(dealIndex)`
@@ -306,7 +309,7 @@ sequenceDiagram
 | NOT_FOUND | 0 | NotFound |
 | VERIFYING / VERIFIER_TIMED_OUT | 2 | Active |
 | COMPLETED | 3 | Success |
-| REJECTED / TIMED_OUT | 4 | Failed |
+| REJECTED / TIMED_OUT / INCONCLUSIVE | 4 | Failed |
 
 ### 6.4 State Transition Diagram
 
@@ -327,9 +330,11 @@ flowchart TD
         COMPLETED["2 COMPLETED ✅"]
         REJECTED["3 REJECTED ❌"]
         TO["4 TIMED_OUT ⏰"]
+        INCON["5 INCONCLUSIVE ❓"]
 
         VERIFYING -->|"result > 0"| COMPLETED
-        VERIFYING -->|"result ≤ 0"| REJECTED
+        VERIFYING -->|"result < 0"| REJECTED
+        VERIFYING -->|"result == 0"| INCON
         VERIFYING -->|"past timeout"| VTO
         VTO -->|"resetVerification()"| TO
     end
@@ -342,7 +347,8 @@ flowchart TD
 | `createCampaign()` | `SubContractCreated(child)` (factory, protocol-level) |
 | `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
 | `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
-| `onVerificationResult(≤0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
+| `onVerificationResult(<0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
+| `onVerificationResult(==0)` | `VerificationReceived` → `DealStateChanged(5)` → `DealPhaseChanged(4)` |
 | `resetVerification()` | `DealStateChanged(4)` → `DealPhaseChanged(4)` |
 
 ### 6.6 Claim Eligibility
@@ -370,7 +376,7 @@ Developer deploys:
   3. XFollowFactory(impl, ..., trustedForwarder = forwarder)
   4. Fund relayer vault (gas budget)
 
-All child contracts inherit trustedForwarder from factory at initialize().
+All child contracts call _initForwarder() during initialize() to set trustedForwarder from factory.
 ```
 
 ### 7.2 Who Pays Gas
@@ -418,7 +424,7 @@ Each claim() locks claimCost from budget.
 | Result | Reward | Verifier Fee | Protocol Fee | Budget Change |
 |--------|--------|--------------|--------------|---------------|
 | Pass (>0) | → B | → Verifier | → FeeCollector | — |
-| Fail (<0) | → budget | → Verifier | → FeeCollector | +rewardPerFollow |
+| Fail (<0) | → budget | → Verifier | → budget | +rewardPerFollow + protocolFee |
 | Inconclusive (0) | → budget | → budget | → budget | +claimCost |
 | Timeout | → budget | → budget | → budget | +claimCost |
 
@@ -440,7 +446,7 @@ After deadline + pendingClaims == 0:
 | 1 | `rewardPerFollow > 0` | InvalidParams |
 | 2 | `deadline > block.timestamp` | InvalidParams |
 | 3 | `verifier != address(0)`, is contract | VerifierNotContract |
-| 4 | `target_username` non-empty | InvalidParams |
+| 4 | `target_user_id > 0` | InvalidParams |
 | 5 | `grossAmount >= claimCost` (at least 1 claim) | InvalidParams |
 | 6 | Clone implementation → child | — |
 | 7 | `USDC.transferFrom(A → child, grossAmount)` | TransferFailed |

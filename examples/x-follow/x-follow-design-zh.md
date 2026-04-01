@@ -45,6 +45,7 @@ XFollowFactory（开发者部署一次）
 - **身份：** Binding Attestation（platformSigner 验签）为 B 的强制要求
 - **协议费：** 按 claim 收取，从 campaign 预算扣除 → 开发者的 feeCollector
 - **失败限制：** `MAX_FAILURES = 3`，每地址每 campaign
+- **重入保护：** `claim()`、`onVerificationResult()`、`resetVerification()`、`withdrawRemaining()` 均带 `nonReentrant` 修饰符（自定义 `_lock` 模式的 reentrancy guard）
 
 ---
 
@@ -80,7 +81,7 @@ contract XFollowFactory is DealBase {
         uint96  rewardPerFollow,
         uint256 sigDeadline,
         bytes calldata sig,
-        string calldata target_username,
+        uint64 target_user_id,
         uint48  deadline
     ) external returns (address campaign);
 }
@@ -102,22 +103,23 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     uint96  public budget;               // 剩余未锁定预算
     uint32  public pendingClaims;
     uint32  public completedClaims;
+    uint32  public verifierTimeoutCount;
     uint256 public signatureDeadline;
-    string  public target_username;
+    uint64  public target_user_id;
     bytes   public verifierSignature;
     bool    public closed;               // true = CLOSED
 
-    // ===================== 从工厂读取 =====================
+    // ===================== 工厂配置（initialize 时传入并存储） =====================
 
     // FEE_COLLECTOR, PROTOCOL_FEE, REQUIRED_SPEC, PLATFORM_SIGNER, feeToken
-    // 运行时从 factory 读取（不存储在子合约，节省 clone storage）
+    // 由工厂在 initialize() 时传入并存储在 campaign storage 中
 
     // ===================== Per-Claim =====================
 
     struct Claim {
         address claimer;
         uint48  timestamp;
-        uint8   status;              // VERIFYING(0) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4)
+        uint8   status;              // VERIFYING(0) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4) / INCONCLUSIVE(5)
         string  follower_username;
     }
 
@@ -136,7 +138,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
 | `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | 开发者 | 部署工厂，设置共享配置 |
-| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_username, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
+| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
 
 ### 3.2 XFollowCampaign 函数
 
@@ -144,8 +146,8 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 |------|--------|------|
 | `initialize(...)` | 仅工厂 | 设置 campaign 参数并立即进入 OPEN。仅可调用一次，仅工厂可调 |
 | `claim(userId, bindingSig)` | 任何 B（免 gas） | 验证 Binding Attestation。从预算锁定 claimCost。发出 VerificationRequested。返回 dealIndex |
-| `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → 付款给 B；result<0 → 奖励退回预算，failCount++；result==0 → 全部退回 |
-| `resetVerification(dealIndex, 0)` | 任何人 | VERIFICATION_TIMEOUT 后。全额 claimCost 退回预算 |
+| `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → 付款给 B；result<0 → 奖励+协议费退回预算，failCount++；result==0 → 全额退回预算 |
+| `resetVerification(dealIndex, 0)` | 任何人 | VERIFICATION_TIMEOUT 后。全额 claimCost 退回预算。verifierTimeoutCount++，emit VerifierTimeout |
 | `withdrawRemaining()` | A | CLOSED 且 pendingClaims==0 时。budget → A |
 
 ### 3.3 查询函数
@@ -154,7 +156,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 |------|--------|------|
 | `claimCost()` | `uint96` | rewardPerFollow + verifierFee + PROTOCOL_FEE |
 | `campaignStatus()` | `uint8` | OPEN(0) / CLOSED(1) |
-| `dealStatus(dealIndex)` | `uint8` | VERIFYING(0) / VERIFIER_TIMED_OUT(1) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4) / NOT_FOUND(255) |
+| `dealStatus(dealIndex)` | `uint8` | VERIFYING(0) / VERIFIER_TIMED_OUT(1) / COMPLETED(2) / REJECTED(3) / TIMED_OUT(4) / INCONCLUSIVE(5) / NOT_FOUND(255) |
 | `canClaim(addr)` | `bool` | addr 是否可 claim |
 | `failures(addr)` | `uint8` | 失败次数 |
 | `remainingSlots()` | `uint256` | budget / claimCost |
@@ -166,10 +168,10 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | `name()` | `"X Follow Campaign"` |
 | `description()` | Campaign 描述 |
 | `tags()` | `["x", "follow"]` |
-| `version()` | `"3.0"` |
+| `version()` | `"5.0"` |
 | `instruction()` | A 和 B 的 Markdown 操作指南 |
-| `requiredSpecs()` | `[REQUIRED_SPEC]`（从工厂读取） |
-| `verificationParams(dealIndex, 0)` | specParams = abi.encode(follower_username, target_username) |
+| `requiredSpecs()` | `[REQUIRED_SPEC]`（initialize 时存储） |
+| `verificationParams(dealIndex, 0)` | specParams = abi.encode(follower_user_id, target_user_id) |
 | `requestVerification(dealIndex, 0)` | 始终 revert — 由 claim() 自动触发 |
 | `phase(dealIndex)` | 0=不存在，2=活跃，3=成功，4=失败 |
 | `dealExists(dealIndex)` | claim 是否存在 |
@@ -182,7 +184,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
 TYPEHASH：
 ```
-Verify(string targetUsername,uint256 fee,uint256 deadline)
+Verify(uint64 targetUserId,uint256 fee,uint256 deadline)
 ```
 
 A 在调用 `createCampaign()` 前向 verifier 请求签名。工厂将签名传递给子合约的 `initialize()`，在其中验证。
@@ -194,7 +196,7 @@ A 在调用 `createCampaign()` 前向 verifier 请求签名。工厂将签名传
 ```solidity
 specParams = abi.encode(
     uint64 follower_user_id,   // 来自 Binding Attestation（claim 参数）
-    string target_username     // campaign 配置
+    uint64 target_user_id     // campaign 配置
 )
 ```
 
@@ -234,13 +236,13 @@ sequenceDiagram
 
     Note over A,Fac: Campaign 创建（通过 relayer 免 gas）
 
-    A->>P: 🟣 request_sign(verifier, {target_username}, deadline)
+    A->>P: 🟣 request_sign(verifier, {target_user_id}, deadline)
     P-->>V: 异步消息
     V->>P: 回复 {accepted, fee, sig}
     P-->>A: 异步消息
 
     Note over A: 🟢 USDC.approve(factory, grossAmount)
-    A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_username, deadline)
+    A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_user_id, deadline)
     Note over Fac: 1. Clone implementation → 子合约地址<br/>2. USDC.transferFrom(A → 子合约, grossAmount)<br/>3. child.initialize(params)<br/>4. initialize 中验证签名<br/>🔵 SubContractCreated(child)
     Note over P: 平台监听工厂事件<br/>→ 自动注册子合约
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
@@ -248,7 +250,7 @@ sequenceDiagram
     Note over B,C: 领取阶段（通过 relayer 免 gas）
 
     Note over B: 1. 完成 Twitter 认证，获取 Binding Attestation
-    Note over B: 2. 在 X 上关注 target_username
+    Note over B: 2. 在 X 上关注 target_user_id
     B->>C: 🟡 canClaim(B.address) → true
     B->>C: 🟢 claim() → dealIndex
     Note over C: 读取 R.usernameOf[B] → 未绑定则 revert<br/>从预算锁定 claimCost<br/>🔵 DealCreated(dealIndex, [B], [verifier])<br/>🔵 VerificationRequested(dealIndex, 0, verifier)
@@ -263,7 +265,7 @@ sequenceDiagram
     alt result > 0 — 已关注
         Note over C: reward → B，verifierFee → V<br/>protocolFee → 开发者 FeeCollector<br/>🔵 DealPhaseChanged(dealIndex, 3)
     else result < 0 — 未关注
-        Note over C: reward → 预算，verifierFee → V<br/>protocolFee → FeeCollector，failCount[B]++<br/>🔵 DealPhaseChanged(dealIndex, 4)
+        Note over C: reward → 预算，verifierFee → V<br/>protocolFee → 预算，failCount[B]++<br/>🔵 DealPhaseChanged(dealIndex, 4)
     else result == 0 — 不确定
         Note over C: claimCost → 预算<br/>🔵 DealPhaseChanged(dealIndex, 4)
     end
@@ -295,8 +297,9 @@ sequenceDiagram
 | 0 | VERIFYING | 存储 | 等待 verifier |
 | 1 | VERIFIER_TIMED_OUT | 派生 | 超过 VERIFICATION_TIMEOUT。`reportResult()` 不再接受，只能调用 `resetVerification()` |
 | 2 | COMPLETED | 存储 | B 已收款 |
-| 3 | REJECTED | 存储 | 未关注或不确定，奖励已退回 |
+| 3 | REJECTED | 存储 | 未关注，奖励已退回 |
 | 4 | TIMED_OUT | 存储 | resetVerification 后，claimCost 已退回 |
+| 5 | INCONCLUSIVE | 存储 | 不确定结果，claimCost 全额退回 |
 | 255 | NOT_FOUND | — | Claim 不存在 |
 
 ### 6.3 Per-Claim `phase(dealIndex)`
@@ -306,7 +309,7 @@ sequenceDiagram
 | NOT_FOUND | 0 | NotFound |
 | VERIFYING / VERIFIER_TIMED_OUT | 2 | Active |
 | COMPLETED | 3 | Success |
-| REJECTED / TIMED_OUT | 4 | Failed |
+| REJECTED / TIMED_OUT / INCONCLUSIVE | 4 | Failed |
 
 ### 6.4 状态转换图
 
@@ -327,9 +330,11 @@ flowchart TD
         COMPLETED["2 COMPLETED ✅"]
         REJECTED["3 REJECTED ❌"]
         TO["4 TIMED_OUT ⏰"]
+        INCONCLUSIVE["5 INCONCLUSIVE ❓"]
 
         VERIFYING -->|"result > 0"| COMPLETED
-        VERIFYING -->|"result ≤ 0"| REJECTED
+        VERIFYING -->|"result < 0"| REJECTED
+        VERIFYING -->|"result == 0"| INCONCLUSIVE
         VERIFYING -->|"超时"| VTO
         VTO -->|"resetVerification()"| TO
     end
@@ -342,8 +347,9 @@ flowchart TD
 | `createCampaign()` | `SubContractCreated(child)`（工厂，协议级） |
 | `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
 | `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
-| `onVerificationResult(≤0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
-| `resetVerification()` | `DealStateChanged(4)` → `DealPhaseChanged(4)` |
+| `onVerificationResult(<0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
+| `onVerificationResult(==0)` | `VerificationReceived` → `DealStateChanged(5)` → `DealPhaseChanged(4)` |
+| `resetVerification()` | `VerifierTimeout` → `DealStateChanged(4)` → `DealPhaseChanged(4)` |
 
 ### 6.6 Claim 资格
 
@@ -370,7 +376,7 @@ budget < claimCost       → 自动关闭 → CLOSED
   3. XFollowFactory(impl, ..., trustedForwarder = forwarder)
   4. 为 relayer vault 充值（gas 预算）
 
-所有子合约在 initialize() 时从工厂继承 trustedForwarder。
+所有子合约在 initialize() 时调用 _initForwarder() 设置 trustedForwarder。
 ```
 
 ### 7.2 谁支付 Gas
@@ -418,7 +424,7 @@ claimCost = rewardPerFollow + verifierFee + PROTOCOL_FEE
 | 结果 | 奖励 | Verifier 费用 | 协议费 | 预算变化 |
 |------|------|--------------|--------|---------|
 | 通过 (>0) | → B | → Verifier | → FeeCollector | — |
-| 失败 (<0) | → 预算 | → Verifier | → FeeCollector | +rewardPerFollow |
+| 失败 (<0) | → 预算 | → Verifier | → 预算 | +rewardPerFollow + protocolFee |
 | 不确定 (0) | → 预算 | → 预算 | → 预算 | +claimCost |
 | 超时 | → 预算 | → 预算 | → 预算 | +claimCost |
 
@@ -440,7 +446,7 @@ deadline 到期 + pendingClaims == 0 后：
 | 1 | `rewardPerFollow > 0` | InvalidParams |
 | 2 | `deadline > block.timestamp` | InvalidParams |
 | 3 | `verifier != address(0)`，是合约 | VerifierNotContract |
-| 4 | `target_username` 非空 | InvalidParams |
+| 4 | `target_user_id > 0` | InvalidParams |
 | 5 | `grossAmount >= claimCost`（至少可 claim 1 次） | InvalidParams |
 | 6 | Clone implementation → 子合约 | — |
 | 7 | `USDC.transferFrom(A → 子合约, grossAmount)` | TransferFailed |

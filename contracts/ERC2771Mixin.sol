@@ -20,6 +20,14 @@ abstract contract ERC2771Mixin {
         _forwarderAdmin = msg.sender;
     }
 
+    /// @dev Clone 初始化时调用（constructor 不执行时的替代路径）
+    /// @param forwarder 可信转发器地址
+    /// @param admin 转发器管理员（address(0) 表示 forwarder 不可变更）
+    function _initForwarder(address forwarder, address admin) internal {
+        trustedForwarder = forwarder;
+        _forwarderAdmin = admin;
+    }
+
     /// @notice 设置或更改可信转发器地址（仅 deployer 可调用）
     /// @param forwarder 新的转发器地址，address(0) 表示禁用
     function setTrustedForwarder(address forwarder) external {
