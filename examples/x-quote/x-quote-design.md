@@ -40,10 +40,10 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 | `dealStatus(dealIndex)` | `uint256 dealIndex` | `uint8` | IDeal | XQuoteDealContract | Caller-independent business status. Returns 0-14 plus 255 for NotFound. `view` |
 | `dealExists(dealIndex)` | `uint256 dealIndex` | `bool` | IDeal | XQuoteDealContract | Whether the deal exists. `view` |
 | `requiredSpecs()` | — | `address[]` | IDeal | XQuoteDealContract | Returns the list of spec addresses required for each verification slot. XQuoteDealContract has only 1 slot, pointing to the XQuoteVerifierSpec address. `view` |
-| `verificationParams(...)` | `uint256 dealIndex, uint256 verificationIndex` | `(address verifier, uint256 fee, uint256 deadline, bytes sig, bytes specParams)` | IDeal | XQuoteDealContract | Called by the Verifier after receiving notification to obtain verification parameters. `specParams = abi.encode(tweet_id, quoter_username, quote_tweet_id)`. `view` |
+| `verificationParams(...)` | `uint256 dealIndex, uint256 verificationIndex` | `(address verifier, uint256 fee, uint256 deadline, bytes sig, bytes specParams)` | IDeal | XQuoteDealContract | Called by the Verifier after receiving notification to obtain verification parameters. `specParams = abi.encode(tweet_id, quoter_user_id, quote_tweet_id)`. `view` |
 | `requestVerification(...)` | `uint256 dealIndex, uint256 verificationIndex` | — | IDeal | XQuoteDealContract | Triggered by a Trader to initiate verification. Escrows verification fee + emits VerificationRequested. `external` |
 | `onVerificationResult(...)` | `uint256 dealIndex, uint256 verificationIndex, int8 result, string reason` | — | IDeal | XQuoteDealContract | Verifier → DealContract callback. DealBase reverts by default, subclasses must override. `external` |
-| `createDeal(...)` | `address partyB, uint256 grossAmount, address verifier, uint256 verifierFee, uint256 deadline, bytes sig, string tweet_id, string quoter_username` | `uint256 dealIndex` | XQuoteDealContract | XQuoteDealContract | Creates a deal. Internally calls `XQuoteVerifierSpec.check()` for signature verification, then compares the recovered signer with `verifier.signer()`. Business parameters are passed as flat arguments |
+| `createDeal(...)` | `address partyB, uint96 grossAmount, address verifier, uint96 verifierFee, uint256 deadline, bytes sig, string tweet_id, uint64 quoterUserId, bytes bindingSig` | `uint256 dealIndex` | XQuoteDealContract | XQuoteDealContract | Creates a deal. Verifies B's Binding Attestation, then calls `XQuoteVerifierSpec.check()` for verifier signature verification. Business parameters are passed as flat arguments |
 | `accept(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Trader B accepts the deal. WaitingAccept → WaitingClaim |
 | `claimDone(...)` | `uint256 dealIndex, string quote_tweet_id` | — | XQuoteDealContract | XQuoteDealContract | Trader B claims task completion and submits the quote tweet ID. WaitingClaim → WaitingConfirm |
 | `confirmAndPay(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Trader A confirms completion and releases payment. WaitingConfirm → Completed |
@@ -76,7 +76,7 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 | `spec()->name()` | — | `string` | VerifierSpec | XQuoteVerifierSpec | Returns `"X Quote Tweet Verifier Spec"`. Called indirectly via spec() |
 | `spec()->version()` | — | `string` | VerifierSpec | XQuoteVerifierSpec | Returns `"1.0"`. Called indirectly via spec() |
 | `spec()->description()` | — | `string` | VerifierSpec | XQuoteVerifierSpec | Specification description: includes parameter definitions, check semantics, and specParams abi.encode format. Called indirectly via spec() |
-| `spec()->check(...)` | `address verifierInstance, string tweet_id, string quoter_username, uint256 fee, uint256 deadline, bytes sig` | `address` | XQuoteVerifierSpec | XQuoteVerifierSpec | Business validation entry point. Reads DOMAIN_SEPARATOR from the instance and verifies the recovered signer matches `verifierInstance.signer()`. Reverts: SignatureExpired / InvalidSignature / InvalidVerifierSignature. Called by DealContract internally during createDeal |
+| `spec()->check(...)` | `address verifierInstance, string tweet_id, uint64 quoterUserId, uint256 fee, uint256 deadline, bytes sig` | `address` | XQuoteVerifierSpec | XQuoteVerifierSpec | Business validation entry point. Reads DOMAIN_SEPARATOR from the instance and verifies the recovered signer matches `verifierInstance.signer()`. Reverts: SignatureExpired / InvalidSignature / InvalidVerifierSignature. Called by DealContract internally during createDeal |
 
 ---
 
@@ -121,9 +121,9 @@ XQuoteVerifier.spec() → XQuoteVerifierSpec (composition relationship)
 ### 4.3 check() Signature Verification Flow
 
 ```
-XQuoteVerifierSpec.check(verifierInstance, tweet_id, quoter_username, fee, deadline, sig)
+XQuoteVerifierSpec.check(verifierInstance, tweet_id, quoterUserId, fee, deadline, sig)
   │
-  ├── 1. Construct structHash(tweet_id, quoter_username, fee, deadline)
+  ├── 1. Construct structHash(tweet_id, quoterUserId, fee, deadline)
   ├── 2. Read DOMAIN_SEPARATOR from verifierInstance
   ├── 3. Construct EIP-712 digest = keccak256(0x1901 || DOMAIN_SEPARATOR || structHash)
   ├── 4. Recover signer from sig (with EIP-2 low-s value check)
@@ -139,7 +139,7 @@ The `specParams` encoding format returned by `verificationParams()`:
 ```solidity
 specParams = abi.encode(
     string tweet_id,          // Original tweet ID
-    string quoter_username,   // Quoter's username
+    uint64 quoter_user_id,    // Quoter's Twitter immutable user_id
     string quote_tweet_id     // Quote tweet ID submitted by B
 )
 ```
@@ -189,14 +189,14 @@ sequenceDiagram
     Note over A,B: Both parties agree on reward, deadline, etc.
 
     Note over A,V: Obtain Verifier Signature
-    A->>P: 🟣 request_sign(verifier_address, params, deadline)<br/>params = {tweet_id, quoter_username}
+    A->>P: 🟣 request_sign(verifier_address, params, deadline)<br/>params = {tweet_id, quoterUserId}
     P-->>V: async message {action: "request_sign", params, deadline}
     V->>P: 🟣 send_message reply
     P-->>A: async message {accepted: true, fee, sig}<br/>or {accepted: false, reason}
 
     Note over A,D: In this example traders = [A, B], verificationIndex = 0
     Note over A: 🟢 USDC.approve(DealContract, reward + protocolFee + verifierFee)
-    A->>D: 🟢 createDeal(partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoter_username) → dealIndex
+    A->>D: 🟢 createDeal(partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoterUserId, bindingSig) → dealIndex
     Note over D,V: Calls spec.check(verifier, business params, verifierFee, deadline, sig) for signature verification<br/>Business params taken from createDeal flat arguments<br/>Failure reverts: SignatureExpired, InvalidSignature, InvalidVerifierSignature
     Note over D: 🔵 DealCreated(dealIndex, traders[], verifiers[])<br/>🔵 DealStateChanged(dealIndex, 0)
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
@@ -509,7 +509,8 @@ At Verifier timeout resetVerification:
 | # | Validation Item | Failure Handling |
 |---|-----------------|------------------|
 | 1 | Verifier spec match: `verifier.spec() == requiredSpecs()[0]` (i.e., XQuoteVerifierSpec) | revert |
-| 2 | Signature verification: calls `XQuoteVerifierSpec.check(verifier, tweet_id, quoter_username, verifierFee, deadline, sig)` | revert SignatureExpired / InvalidSignature / InvalidVerifierSignature |
+| 2 | Binding Attestation: `_verifyBinding(partyB, quoterUserId, bindingSig)` | revert InvalidBindingSignature |
+| 3 | Verifier signature: calls `XQuoteVerifierSpec.check(verifier, tweet_id, quoterUserId, verifierFee, deadline, sig)` | revert SignatureExpired / InvalidSignature / InvalidVerifierSignature |
 | 3 | Fund transfer: `USDC.transferFrom(A, contract, grossAmount)` | revert (insufficient allowance or balance) |
 | 4 | Recording and events: `_recordStart([A, B], [verifier])` → emits DealCreated + DealStateChanged(0) | — |
 

@@ -7,10 +7,11 @@ import "./XFollowVerifierSpec.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
 import "./ERC2771Mixin.sol";
+import "./BindingAttestation.sol";
 
 
 /// @title XFollowDealContract - X 付费关注 Campaign 合约
-/// @notice 合约即 campaign。A 存入预算，任何 TwitterRegistry 认证用户可关注后领取固定奖励。
+/// @notice 合约即 campaign。A 存入预算，任何通过 Binding Attestation 认证的用户可关注后领取固定奖励。
 ///         每个 B 的 claim() 创建一个新的 dealIndex。全自动，无需协商。
 /// @dev 生命周期：OPEN → CLOSED
 ///      OPEN：createDeal() 成功后立即生效，接受 claim
@@ -33,6 +34,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     error AlreadyClaimed();
     error MaxFailures();
     error NotVerified();
+    error InvalidBindingSignature();
     error PendingClaim();
     error NotClosed();
     error PendingClaims();
@@ -70,7 +72,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         address claimer;             // B 的地址
         uint48  timestamp;           // claim 创建时间
         uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT
-        uint64  follower_user_id;    // claim 时从 TwitterRegistry 读取
+        uint64  follower_user_id;    // claim 时通过 Binding Attestation 验证
     }
 
     // ===================== 常量 =====================
@@ -82,7 +84,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     address public immutable FEE_COLLECTOR;
     uint96 public immutable PROTOCOL_FEE;
     address public immutable REQUIRED_SPEC;
-    address public immutable TWITTER_REGISTRY;
+    BindingAttestation public immutable BINDING_ATTESTATION;
 
     // ===================== Campaign 存储 =====================
 
@@ -120,18 +122,18 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 构造函数 =====================
 
-    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address twitterRegistry) {
+    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address bindingAttestation) {
         _setInitializer();
         if (feeCollector == address(0) || feeCollector == address(this) || feeCollector.code.length == 0) {
             revert InvalidParams();
         }
         if (protocolFee_ < MIN_PROTOCOL_FEE) revert InvalidParams();
         if (requiredSpec == address(0)) revert InvalidSpecAddress();
-        if (twitterRegistry == address(0)) revert InvalidParams();
+        if (bindingAttestation == address(0) || bindingAttestation.code.length == 0) revert InvalidParams();
         FEE_COLLECTOR = feeCollector;
         PROTOCOL_FEE = protocolFee_;
         REQUIRED_SPEC = requiredSpec;
-        TWITTER_REGISTRY = twitterRegistry;
+        BINDING_ATTESTATION = BindingAttestation(bindingAttestation);
     }
 
     // ===================== Campaign 设置 =====================
@@ -183,8 +185,10 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== Claim（每个 claim = 一个 dealIndex） =====================
 
-    /// @notice B 领取关注奖励。无参数，合约从 TwitterRegistry 读取 B 的 user_id。
-    function claim() external returns (uint256 dealIndex) {
+    /// @notice B 领取关注奖励。提交 Binding Attestation 证明身份。
+    /// @param userId B 的 Twitter immutable user_id
+    /// @param bindingSig Platform 签发的绑定证明签名
+    function claim(uint64 userId, bytes calldata bindingSig) external returns (uint256 dealIndex) {
         // 检查并可能触发 auto-close
         _checkAndClose();
         if (campaignStatus != OPEN) revert CampaignNotOpen();
@@ -196,13 +200,9 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         // 检查是否有 pending claim
         if (_hasPendingClaim(sender)) revert PendingClaim();
 
-        // 从 TwitterRegistry 读取 user_id
-        (bool success, bytes memory data) = TWITTER_REGISTRY.staticcall(
-            abi.encodeWithSignature("userIdOf(address)", sender)
-        );
-        if (!success) revert NotVerified();
-        uint64 followerUserId = abi.decode(data, (uint64));
-        if (followerUserId == 0) revert NotVerified();
+        // 验证 Binding Attestation
+        if (!BINDING_ATTESTATION.verify(sender, userId, bindingSig)) revert InvalidBindingSignature();
+        uint64 followerUserId = userId;
 
         uint96 cost = _claimCost();
         if (budget < cost) {
@@ -390,7 +390,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         return uint256(budget) / uint256(cost);
     }
 
-    /// @notice 指定地址是否可 claim
+    /// @notice 指定地址是否可 claim（不含绑定检查，绑定在 claim() 时验证）
     function canClaim(address addr) external view returns (bool) {
         if (campaignStatus != OPEN) return false;
         if (block.timestamp > deadline) return false;
@@ -398,13 +398,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
         if (claimed[addr]) return false;
         if (failCount[addr] >= MAX_FAILURES) return false;
         if (_hasPendingClaim(addr)) return false;
-        // 检查 TwitterRegistry（staticcall 不 revert）
-        (bool success, bytes memory data) = TWITTER_REGISTRY.staticcall(
-            abi.encodeWithSignature("userIdOf(address)", addr)
-        );
-        if (!success) return false;
-        uint64 userId = abi.decode(data, (uint64));
-        return userId != 0;
+        return true;
     }
 
     /// @notice 地址的失败次数
@@ -419,7 +413,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function description() external pure override returns (string memory) {
-        return "Campaign: pay fixed USDC reward per X follow. 1-to-many, auto-verified via twitterapi.io + twitter-api45. TwitterRegistry identity required.";
+        return "Campaign: pay fixed USDC reward per X follow. 1-to-many, auto-verified via twitterapi.io + twitter-api45. Binding Attestation required.";
     }
 
     function tags() external pure override returns (string[] memory) {
@@ -430,7 +424,7 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function version() external pure override returns (string memory) {
-        return "3.0";
+        return "4.0";
     }
 
     function protocolFeePolicy() external pure override returns (string memory) {
@@ -496,12 +490,12 @@ contract XFollowDealContract is DealBase, Initializable, ERC2771Mixin {
             "Pay fixed USDC reward per follow to a target account on X. 1-to-many campaign model.\n\n"
             "## Campaign Lifecycle\n\n"
             "OPEN -> CLOSED\n\n"
-            "- **OPEN**: Campaign goes live immediately after createDeal(). Params are locked, anyone with TwitterRegistry binding can claim().\n"
+            "- **OPEN**: Campaign goes live immediately after createDeal(). Params are locked, anyone with Binding Attestation can claim().\n"
             "- **CLOSED**: Auto-triggered on deadline or budget exhaustion. A calls withdrawRemaining().\n\n"
             "## For Followers (B)\n\n"
-            "1. Bind your Twitter via TwitterRegistry (if not already)\n"
+            "1. Complete Twitter verification on Platform to get Binding Attestation\n"
             "2. Follow the target account on X\n"
-            "3. Call `claim()` (no parameters needed)\n"
+            "3. Call `claim(userId, bindingSig)` with your attestation\n"
             "4. Wait for verification result\n\n"
             "## Costs\n\n"
             "B pays nothing. All fees (reward + verifierFee + protocolFee) come from A's budget.\n"

@@ -7,6 +7,7 @@ import "./XQuoteVerifierSpec.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
 import "./ERC2771Mixin.sol";
+import "./BindingAttestation.sol";
 
 
 /// @title XQuoteDealContract - X 引用推文交易合约
@@ -49,6 +50,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     error InsufficientAllowance();
     error InsufficientBalance();
     error NotVerified();
+    error InvalidBindingSignature();
 
     // ===================== dealStatus 常量 =====================
     // 基础值（可写入存储）和派生值（仅由 dealStatus() 运行时计算）。
@@ -127,7 +129,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     address public immutable FEE_COLLECTOR;
     uint96 public immutable PROTOCOL_FEE;
     address public immutable REQUIRED_SPEC;
-    address public immutable TWITTER_REGISTRY;
+    BindingAttestation public immutable BINDING_ATTESTATION;
 
     // ===================== 存储 =====================
 
@@ -163,23 +165,25 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 构造函数 =====================
 
-    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address twitterRegistry) {
+    constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address bindingAttestation) {
         _setInitializer();
         if (feeCollector == address(0) || feeCollector == address(this) || feeCollector.code.length == 0) {
             revert InvalidFeeCollector();
         }
         if (protocolFee_ < MIN_PROTOCOL_FEE) revert FeeTooLow();
         if (requiredSpec == address(0)) revert InvalidSpecAddress();
-        if (twitterRegistry == address(0)) revert InvalidParams();
+        if (bindingAttestation == address(0) || bindingAttestation.code.length == 0) revert InvalidParams();
         FEE_COLLECTOR = feeCollector;
         PROTOCOL_FEE = protocolFee_;
         REQUIRED_SPEC = requiredSpec;
-        TWITTER_REGISTRY = twitterRegistry;
+        BINDING_ATTESTATION = BindingAttestation(bindingAttestation);
     }
 
     // ===================== 创建交易 =====================
 
     /// @notice 创建交易（需要预先 approve USDC）
+    /// @param quoterUserId B 的 Twitter immutable user_id
+    /// @param bindingSig Platform 签发的 B 的绑定证明签名
     function createDeal(
         address partyB,
         uint96  grossAmount,
@@ -187,7 +191,9 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         uint96  verifierFee,
         uint256 deadline,
         bytes calldata sig,
-        string calldata tweet_id
+        string calldata tweet_id,
+        uint64  quoterUserId,
+        bytes calldata bindingSig
     ) external returns (uint256 dealIndex) {
         // --- 参数校验 ---
         address sender = _msgSender();
@@ -204,12 +210,8 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
         if (bytes(tweet_id).length == 0) revert InvalidParams();
 
-        (bool success, bytes memory data) = TWITTER_REGISTRY.staticcall(
-            abi.encodeWithSignature("userIdOf(address)", partyB)
-        );
-        if (!success) revert NotVerified();
-        uint64 quoterUserId = abi.decode(data, (uint64));
-        if (quoterUserId == 0) revert NotVerified();
+        // 验证 B 的 Binding Attestation
+        if (!BINDING_ATTESTATION.verify(partyB, quoterUserId, bindingSig)) revert InvalidBindingSignature();
 
         _verifyVerifierSignature(verifier, tweet_id, quoterUserId, verifierFee, deadline, sig);
 
@@ -625,7 +627,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function description() external pure override returns (string memory) {
-        return "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). TwitterRegistry identity required. On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.";
+        return "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). Binding Attestation required. On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.";
     }
 
     function tags() external pure override returns (string[] memory) {
@@ -636,7 +638,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     function version() external pure override returns (string memory) {
-        return "2.0";
+        return "3.0";
     }
 
     function protocolFee() external view returns (uint96) {
@@ -705,9 +707,11 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             "| verifierFee | uint96 | Verification fee (USDC raw value) |\n"
             "| deadline | uint256 | Verifier signature validity (Unix seconds) |\n"
             "| sig | bytes | Verifier EIP-712 signature |\n"
-            "| tweet_id | string | Tweet ID to be quoted |\n\n"
+            "| tweet_id | string | Tweet ID to be quoted |\n"
+            "| quoterUserId | uint64 | B's Twitter immutable user_id |\n"
+            "| bindingSig | bytes | Platform binding attestation signature for B |\n\n"
             "**Prerequisites**:\n"
-            "1. B must have a TwitterRegistry binding before createDeal()\n"
+            "1. B must have a Binding Attestation (GET /twitter/attestation) before createDeal()\n"
             "2. Confirm B has not already quoted the target tweet, otherwise the deal is meaningless\n"
             "3. Both parties have agreed on B's reward and tweet_id. A calls `protocolFee()` to get the protocol fee, grossAmount = reward + protocol fee\n"
             "4. USDC `approve(contract address, reward + protocol fee + verification fee)`, i.e., grossAmount + verifierFee\n"

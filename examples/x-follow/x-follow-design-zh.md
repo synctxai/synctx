@@ -21,7 +21,7 @@ XFollowFactory（开发者部署一次）
   │  ├── implementation: XFollowCampaign（逻辑合约）
   │  ├── protocolFee, feeCollector（→ 开发者）
   │  ├── trustedForwarder（ERC2771，所有子合约共享）
-  │  ├── requiredSpec, twitterRegistry（共享配置）
+  │  ├── requiredSpec, platformSigner（共享配置）
   │  └── relayer vault 为 A + B 的 gasless 交易提供 gas（开发者预充）
   │
   ├── createCampaign() → Clones.clone(impl) + initialize()
@@ -42,7 +42,7 @@ XFollowFactory（开发者部署一次）
 - **Gasless：** 工厂设置 `trustedForwarder` → 子合约继承 → A 的 createCampaign 和 B 的 claim() 均通过 relayer 免 gas。Gas 由开发者的 relayer vault 支付
 - **生命周期：** `createCampaign()` → 子合约直接进入 OPEN（无 TESTING 阶段）
 - **自动注册：** 工厂 emit `SubContractCreated(address subContract)` → 平台监听工厂事件 → 自动发现并注册子合约
-- **身份：** `TwitterRegistry` 绑定为 B 的强制要求
+- **身份：** Binding Attestation（platformSigner 验签）为 B 的强制要求
 - **协议费：** 按 claim 收取，从 campaign 预算扣除 → 开发者的 feeCollector
 - **失败限制：** `MAX_FAILURES = 3`，每地址每 campaign
 
@@ -61,7 +61,7 @@ contract XFollowFactory is DealBase {
     address public immutable FEE_COLLECTOR;      // 开发者的费用接收地址
     uint96  public immutable PROTOCOL_FEE;       // 每次 claim 的手续费（如 10000 = 0.01 USDC）
     address public immutable REQUIRED_SPEC;      // XFollowVerifierSpec 地址
-    address public immutable TWITTER_REGISTRY;   // TwitterRegistry 地址
+    address public immutable PLATFORM_SIGNER;    // Binding Attestation 签名者
     address public immutable TRUSTED_FORWARDER;  // ERC2771 转发器（A + B 免 gas）
     address public immutable FEE_TOKEN;          // USDC 地址
 
@@ -109,7 +109,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
     // ===================== 从工厂读取 =====================
 
-    // FEE_COLLECTOR, PROTOCOL_FEE, REQUIRED_SPEC, TWITTER_REGISTRY, feeToken
+    // FEE_COLLECTOR, PROTOCOL_FEE, REQUIRED_SPEC, PLATFORM_SIGNER, feeToken
     // 运行时从 factory 读取（不存储在子合约，节省 clone storage）
 
     // ===================== Per-Claim =====================
@@ -143,7 +143,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
 | `initialize(...)` | 仅工厂 | 设置 campaign 参数并立即进入 OPEN。仅可调用一次，仅工厂可调 |
-| `claim()` | 任何 B（免 gas） | 无参数。从 TwitterRegistry 读取用户名。从预算锁定 claimCost。发出 VerificationRequested。返回 dealIndex |
+| `claim(userId, bindingSig)` | 任何 B（免 gas） | 验证 Binding Attestation。从预算锁定 claimCost。发出 VerificationRequested。返回 dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → 付款给 B；result<0 → 奖励退回预算，failCount++；result==0 → 全部退回 |
 | `resetVerification(dealIndex, 0)` | 任何人 | VERIFICATION_TIMEOUT 后。全额 claimCost 退回预算 |
 | `withdrawRemaining()` | A | CLOSED 且 pendingClaims==0 时。budget → A |
@@ -193,7 +193,7 @@ A 在调用 `createCampaign()` 前向 verifier 请求签名。工厂将签名传
 
 ```solidity
 specParams = abi.encode(
-    string follower_username,  // 从 TwitterRegistry.usernameOf[claimer] 读取
+    uint64 follower_user_id,   // 来自 Binding Attestation（claim 参数）
     string target_username     // campaign 配置
 )
 ```
@@ -224,7 +224,7 @@ sequenceDiagram
     participant Fac as XFollowFactory
     participant C as XFollowCampaign（子合约）
     participant V as Verifier
-    participant R as TwitterRegistry
+    participant PS as PlatformSigner
 
     Note over Dev: 一次性设置
     Dev->>Dev: 部署 XFollowCampaign（implementation）
@@ -247,7 +247,7 @@ sequenceDiagram
 
     Note over B,C: 领取阶段（通过 relayer 免 gas）
 
-    Note over B: 1. 通过 TwitterRegistry 绑定 Twitter
+    Note over B: 1. 完成 Twitter 认证，获取 Binding Attestation
     Note over B: 2. 在 X 上关注 target_username
     B->>C: 🟡 canClaim(B.address) → true
     B->>C: 🟢 claim() → dealIndex
@@ -351,7 +351,7 @@ flowchart TD
 campaign CLOSED          → CampaignNotOpen
 claimed[B]               → AlreadyClaimed
 failCount[B] >= 3        → MaxFailures
-无 TwitterRegistry 绑定   → NotVerified
+Binding Attestation 无效  → InvalidBindingSignature
 budget < claimCost       → 自动关闭 → CLOSED
 有待处理 claim            → PendingClaim
 否则                      → 可 claim
@@ -465,7 +465,7 @@ deadline 到期 + pendingClaims == 0 后：
 | 2 | `budget >= claimCost` | 自动关闭 |
 | 3 | `!claimed[sender]` | AlreadyClaimed |
 | 4 | `failCount[sender] < MAX_FAILURES` | MaxFailures |
-| 5 | `TwitterRegistry.usernameOf[sender]` 非空 | NotVerified |
+| 5 | Binding Attestation 有效（platformSigner 验签） | InvalidBindingSignature |
 | 6 | 无待处理 claim | PendingClaim |
 | 7 | 锁定 claimCost，pendingClaims++ | — |
 

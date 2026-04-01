@@ -21,7 +21,7 @@ XFollowFactory (developer deploys once)
   │  ├── implementation: XFollowCampaign (logic contract)
   │  ├── protocolFee, feeCollector (→ developer)
   │  ├── trustedForwarder (ERC2771, shared by all children)
-  │  ├── requiredSpec, twitterRegistry (shared config)
+  │  ├── requiredSpec, platformSigner (shared config)
   │  └── relayer vault funds gas for A + B (developer pre-funded)
   │
   ├── createCampaign() → Clones.clone(impl) + initialize()
@@ -42,7 +42,7 @@ XFollowFactory (developer deploys once)
 - **Gasless:** Factory sets `trustedForwarder` → children inherit → A's createCampaign and B's claim() both gasless via relayer. Gas paid from developer's relayer vault
 - **Lifecycle:** `createCampaign()` → child enters OPEN immediately (no TESTING phase)
 - **Auto-registration:** Factory emits `SubContractCreated(address subContract)` → platform monitors factory events → auto-discovers and registers child contracts
-- **Identity:** `TwitterRegistry` binding mandatory for B
+- **Identity:** Binding Attestation (platformSigner verification) mandatory for B
 - **Protocol fee:** Per-claim, from campaign budget → developer's feeCollector
 - **Failure limit:** `MAX_FAILURES = 3` per address per campaign
 
@@ -61,7 +61,7 @@ contract XFollowFactory is DealBase {
     address public immutable FEE_COLLECTOR;      // developer's fee receiver
     uint96  public immutable PROTOCOL_FEE;       // per-claim fee (e.g. 10000 = 0.01 USDC)
     address public immutable REQUIRED_SPEC;      // XFollowVerifierSpec address
-    address public immutable TWITTER_REGISTRY;   // TwitterRegistry address
+    address public immutable PLATFORM_SIGNER;    // Binding Attestation signer
     address public immutable TRUSTED_FORWARDER;  // ERC2771 forwarder (gasless for A + B)
     address public immutable FEE_TOKEN;          // USDC address
 
@@ -109,7 +109,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
     // ===================== Read from factory =====================
 
-    // FEE_COLLECTOR, PROTOCOL_FEE, REQUIRED_SPEC, TWITTER_REGISTRY, feeToken
+    // FEE_COLLECTOR, PROTOCOL_FEE, REQUIRED_SPEC, PLATFORM_SIGNER, feeToken
     // all read from factory at runtime (not stored in child, saves clone storage)
 
     // ===================== Per-Claim =====================
@@ -143,7 +143,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | Method | Caller | Description |
 |--------|--------|-------------|
 | `initialize(...)` | Factory only | Set campaign params and enter OPEN immediately. Can only be called once, only by factory |
-| `claim()` | Any B (gasless) | No args. Read TwitterRegistry for username. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
+| `claim(userId, bindingSig)` | Any B (gasless) | Verify Binding Attestation. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → pay B; result<0 → reward to budget, failCount++; result==0 → all to budget |
 | `resetVerification(dealIndex, 0)` | Anyone | After VERIFICATION_TIMEOUT. Full claimCost returns to budget |
 | `withdrawRemaining()` | A | Only when CLOSED + pendingClaims==0. Budget → A |
@@ -193,7 +193,7 @@ Constraint: `sigDeadline >= campaignDeadline`.
 
 ```solidity
 specParams = abi.encode(
-    string follower_username,  // read from TwitterRegistry.usernameOf[claimer]
+    uint64 follower_user_id,   // from Binding Attestation (claim parameter)
     string target_username     // from campaign config
 )
 ```
@@ -224,7 +224,7 @@ sequenceDiagram
     participant Fac as XFollowFactory
     participant C as XFollowCampaign (child)
     participant V as Verifier
-    participant R as TwitterRegistry
+    participant PS as PlatformSigner
 
     Note over Dev: One-time setup
     Dev->>Dev: Deploy XFollowCampaign (implementation)
@@ -247,7 +247,7 @@ sequenceDiagram
 
     Note over B,C: Claim Phase (gasless via relayer)
 
-    Note over B: 1. Bind Twitter via TwitterRegistry
+    Note over B: 1. Complete Twitter verification, get Binding Attestation
     Note over B: 2. Follow target_username on X
     B->>C: 🟡 canClaim(B.address) → true
     B->>C: 🟢 claim() → dealIndex
@@ -351,7 +351,7 @@ flowchart TD
 campaign CLOSED          → CampaignNotOpen
 claimed[B]               → AlreadyClaimed
 failCount[B] >= 3        → MaxFailures
-no TwitterRegistry bind  → NotVerified
+invalid Binding Attestation → InvalidBindingSignature
 budget < claimCost       → auto-close → CLOSED
 has pending claim        → PendingClaim
 otherwise                → eligible
@@ -465,7 +465,7 @@ After deadline + pendingClaims == 0:
 | 2 | `budget >= claimCost` | auto-close |
 | 3 | `!claimed[sender]` | AlreadyClaimed |
 | 4 | `failCount[sender] < MAX_FAILURES` | MaxFailures |
-| 5 | `TwitterRegistry.usernameOf[sender]` non-empty | NotVerified |
+| 5 | Binding Attestation valid (platformSigner verification) | InvalidBindingSignature |
 | 6 | No pending claim | PendingClaim |
 | 7 | Lock claimCost, pendingClaims++ | — |
 

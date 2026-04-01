@@ -13,7 +13,7 @@ contract XFollowVerifierSpec is VerifierSpec {
 
     // ============ 常量 ============
     // 签名为 per-campaign：Verifier 承诺为某 target_user_id 验证 follow 关系
-    // follower_user_id 不在签名中（每个 claim 的 follower 不同，由合约从 TwitterRegistry 读取）
+    // follower_user_id 不在签名中（每个 claim 的 follower 不同，由 B 提交 Binding Attestation 提供）
 
     bytes32 public constant VERIFY_TYPEHASH = keccak256(
         "Verify(uint64 targetUserId,uint256 fee,uint256 deadline)"
