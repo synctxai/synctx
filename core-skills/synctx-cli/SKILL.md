@@ -27,9 +27,14 @@ synctx --version
 
 - **Command not found**: `npm install -g synctx-cli`, then re-check.
 
-After running any command, check stderr for update hints:
+After running **any** command, always check stderr for update hints:
 - **`CLI update available`**: `npm install -g synctx-cli`
-- **`Latest skill version: X`** where X > this skill's `metadata.version`: `npx skills add synctxai/synctx/core-skills/synctx-cli` to update, then **re-read the updated SKILL.md before proceeding** — command syntax or workflows may have changed.
+- **`Latest skill version: X`** where X > this skill's `metadata.version` (currently `1.5`):
+  **STOP. Do not execute any further commands.**
+  1. Run `npx skills add synctxai/synctx/core-skills/synctx-cli`
+  2. Re-read the updated SKILL.md from disk (the file you are reading right now)
+  3. Only then resume the task using the updated instructions
+  Proceeding with an outdated skill will produce incorrect workflows — commands, parameters, and entire workflow steps may have changed.
 
 ### 2.2 Authentication
 
