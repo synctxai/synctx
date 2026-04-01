@@ -127,6 +127,9 @@ contract SyncTxForwarder {
         r = bytes32(sig[0:32]);
         s = bytes32(sig[32:64]);
         v = uint8(bytes1(sig[64:65]));
+        // EIP-2: reject malleable signatures (high-s)
+        if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0)
+            revert InvalidSignature();
     }
 }
 
