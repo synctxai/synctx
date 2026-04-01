@@ -28,7 +28,7 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 | `_recordStart(...)` | `address[] traders, address[] verifiers` | `uint256 dealIndex` | DealBase | DealBase | Internal utility. Emits DealCreated, returns dealIndex |
 | `_emitPhaseChanged(dealIndex, toPhase)` | `uint256 dealIndex, uint8 toPhase` | — | DealBase | DealBase | Internal utility. Emits DealPhaseChanged. phase: 2=Active, 3=Success, 4=Failed, 5=Cancelled |
 | `_emitStateChanged(...)` | `uint256 dealIndex, uint8 stateIndex` | — | DealBase | DealBase | Internal utility. Emits DealStateChanged |
-| `_emitViolated(...)` | `uint256 dealIndex, address violator` | — | DealBase | DealBase | Internal utility. Emits DealViolated |
+| `_emitViolated(...)` | `uint256 dealIndex, address violator, string reason` | — | DealBase | DealBase | Internal utility. Emits DealViolated |
 | `name()` | — | `string` | IDeal | XQuoteDealContract | Returns `"XQuoteDealContract"`. `pure` |
 | `description()` | — | `string` | IDeal | XQuoteDealContract | Contract description, used for SyncTx search. `pure` |
 | `tags()` | — | `string[]` | IDeal | XQuoteDealContract | Returns `["x", "quote"]`. `pure` |
@@ -482,12 +482,14 @@ At requestVerification:
   USDC.transferFrom(caller → contract) escrows verification fee
 
 At reportResult callback (inside onVerificationResult):
-  Transfer escrowed verification fee to Verifier contract
+  Transfer escrowed verification fee to Verifier contract (for ALL result values: >0, <0, ==0)
   Verifier contract verifies received amount ≥ expectedFee
 
 At Verifier timeout resetVerification:
   Escrowed verification fee refunded to the party who initiated verification
 ```
+
+> **Design principle:** XQuoteDealContract pays the verification fee regardless of the result value. The Verifier performed the work; the fee is for the service, not the outcome. This ensures `reportResult()` never reverts due to `FeeNotReceived`, and the DealContract is responsible for correct fee handling — the Verifier should not bear the cost of a DealContract's fee logic error.
 
 ### 8.4 Abnormal Path Fund Destinations
 
@@ -528,9 +530,12 @@ At Verifier timeout resetVerification:
 | # | Validation Item | Failure Handling |
 |---|-----------------|------------------|
 | 1 | Caller validation: `msg.sender` must be the VerifierContract corresponding to that verificationIndex | revert |
-| 2 | Emit `VerificationReceived(dealIndex, verificationIndex, msg.sender, result)` | — |
-| 3 | Transfer escrowed verification fee to Verifier contract | — |
-| 4 | Handle business logic based on result: | — |
+| 2 | Status validation: deal must be in VERIFYING state | revert InvalidStatus |
+| 3 | Handle business logic based on result: | — |
 |   | `result > 0` (passed): release payment to B → DealCompleted → DealStateChanged(11) → `_emitPhaseChanged` → DealPhaseChanged(dealIndex, 3) | — |
-|   | `result < 0` (failed): `_emitViolated(dealIndex, partyB)` → DealStateChanged(12) → `_emitPhaseChanged` → DealPhaseChanged(dealIndex, 4) | — |
+|   | `result < 0` (failed): `_emitViolated(dealIndex, partyB, reason)` → DealStateChanged(12) → `_emitPhaseChanged` → DealPhaseChanged(dealIndex, 4) | — |
 |   | `result == 0` (inconclusive): SettlingStarted → DealStateChanged(8) → enter Settling | — |
+| 4 | Emit `VerificationReceived(dealIndex, verificationIndex, msg.sender, result)` | — |
+| 5 | Transfer escrowed verification fee to Verifier contract (**all result values**, including inconclusive) | revert TransferFailed |
+
+> **Error handling responsibility:** The DealContract is responsible for ensuring the verification fee transfer succeeds. If `onVerificationResult` fails to pay the agreed fee, `VerifierBase.reportResult()` will revert with `FeeNotReceived`, rolling back all state changes and events — leaving no on-chain trace of the error. Therefore the DealContract must always transfer the correct fee amount for every result value to avoid this silent failure.

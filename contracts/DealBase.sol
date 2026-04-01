@@ -61,8 +61,8 @@ abstract contract DealBase is IDeal {
     }
 
     /// @dev 发出违约标记
-    function _emitViolated(uint256 dealIndex, address violator) internal {
-        emit DealViolated(dealIndex, violator);
+    function _emitViolated(uint256 dealIndex, address violator, string memory reason) internal {
+        emit DealViolated(dealIndex, violator, reason);
     }
 
     // ===================== 抽象方法 =====================

@@ -110,8 +110,8 @@ interface IDeal {
     ///      平台按 indexed phase 过滤即可替代原来的多个事件。
     event DealPhaseChanged(uint256 indexed dealIndex, uint8 indexed phase);
 
-    /// @notice 参与方违约时发出（标记违约方，与 DealPhaseChanged→Failed 同时发出）
-    event DealViolated(uint256 indexed dealIndex, address indexed violator);
+    /// @notice 参与方违约时发出（标记违约方与原因，与 DealPhaseChanged→Failed 同时发出）
+    event DealViolated(uint256 indexed dealIndex, address indexed violator, string reason);
 
     // --- 业务状态与验证事件 ---
 

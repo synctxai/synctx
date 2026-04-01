@@ -357,7 +357,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @dev result > 0 → 通过，付款给 B
     ///      result < 0 → 失败，B 违约
     ///      result == 0 → 不确定，进入协商
-    function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata /* reason */) external override onlySlot0(verificationIndex) {
+    function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason) external override onlySlot0(verificationIndex) {
         Deal storage d = deals[dealIndex];
 
         if (msg.sender != d.verifier) revert NotVerifier();
@@ -388,7 +388,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             _emitStateChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
         } else if (result < 0) {
-            _emitViolated(dealIndex, d.partyB);
+            _emitViolated(dealIndex, d.partyB, reason);
             _emitStateChanged(dealIndex, VIOLATED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
         } else {
@@ -523,7 +523,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             if (_msgSender() != d.partyA) revert NotPartyA();
             d.status = VIOLATED;
             d.violator = d.partyB;
-            _emitViolated(dealIndex, d.partyB);
+            _emitViolated(dealIndex, d.partyB, "claim timeout");
             _emitStateChanged(dealIndex, VIOLATED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
 
