@@ -5,6 +5,7 @@ import "../../contracts/DealBase.sol";
 import "../../contracts/IVerifier.sol";
 import "../../contracts/IERC20.sol";
 import "../../contracts/Initializable.sol";
+import "../../contracts/ERC2771Mixin.sol";
 import "../european-option-verifier-spec/SettlementPriceVerifierSpec.sol";
 
 interface IERC20MetadataLike {
@@ -26,7 +27,7 @@ interface ISettlementPriceVerifierLike {
 ///      3. 到期后任一参与方可请求价格验证
 ///      4. Verifier 提交 settlement price，合约按 option type 自动结算
 ///      5. 若验证失败/不确定，则进入 Settling，由双方协商；超时则 unwind
-contract EuropeanOptionDealContract is DealBase, Initializable {
+contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
 
     error FeeTokenNotSet();
     error InvalidParams();
@@ -49,9 +50,8 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
     error InvalidSettlement();
     error VerificationNotTimedOut();
     error SettlementNotTimedOut();
-    error InsufficientAllowance();
-    error InsufficientBalance();
     error Reentrancy();
+    error VersionMismatch();
 
     uint8 public constant OPTION_PUT = 0;
     uint8 public constant OPTION_CALL = 1;
@@ -106,6 +106,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
     struct SettlementProposal {
         address proposer;
         uint256 amountToHolder; // denominated in collateral asset
+        uint256 version;        // 提案版本号，每次提案 +1
     }
 
     struct CreateDealParams {
@@ -140,13 +141,14 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
 
     constructor(address requiredSpec) {
         _setInitializer();
-        if (requiredSpec == address(0)) revert InvalidSpecAddress();
+        if (requiredSpec == address(0) || requiredSpec.code.length == 0) revert InvalidSpecAddress();
         REQUIRED_SPEC = requiredSpec;
     }
 
     function createDeal(CreateDealParams calldata p) external nonReentrant returns (uint256 dealIndex) {
+        address sender = _msgSender();
         if (feeToken == address(0)) revert FeeTokenNotSet();
-        if (p.writer == address(0) || p.writer == msg.sender || p.verifier == address(0) || p.underlying == address(0)) {
+        if (p.writer == address(0) || p.writer == sender || p.verifier == address(0) || p.underlying == address(0)) {
             revert InvalidParams();
         }
         if (p.optionType != OPTION_PUT && p.optionType != OPTION_CALL) revert InvalidOptionType();
@@ -168,11 +170,11 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
             p.verifierSig
         );
 
-        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), p.premium)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(sender, address(this), p.premium)) revert TransferFailed();
 
         {
             address[] memory traders = new address[](2);
-            traders[0] = msg.sender;
+            traders[0] = sender;
             traders[1] = p.writer;
             address[] memory verifiers = new address[](1);
             verifiers[0] = p.verifier;
@@ -180,7 +182,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
         }
 
         Deal storage d = deals[dealIndex];
-        d.holder = msg.sender;
+        d.holder = sender;
         d.writer = p.writer;
         d.underlying = p.underlying;
         d.verifier = p.verifier;
@@ -201,14 +203,15 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
 
     function accept(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.writer) revert NotWriter();
+        address sender = _msgSender();
+        if (sender != d.writer) revert NotWriter();
         if (d.status != WAITING_ACCEPT) revert InvalidStatus();
         if (_isAcceptTimedOut(d)) revert AlreadyTimedOut();
 
         uint256 collateral = _requiredCollateral(d.optionType, d.quantity, d.strike);
         address collateralToken = _collateralAsset(d);
 
-        if (!IERC20(collateralToken).transferFrom(msg.sender, address(this), collateral)) revert TransferFailed();
+        if (!IERC20(collateralToken).transferFrom(sender, address(this), collateral)) revert TransferFailed();
 
         d.reservedCollateral = collateral;
         d.status = ACTIVE;
@@ -219,7 +222,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
 
     function cancelDeal(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.holder) revert NotHolder();
+        if (_msgSender() != d.holder) revert NotHolder();
         if (d.status != WAITING_ACCEPT) revert InvalidStatus();
         if (!_isAcceptTimedOut(d)) revert NotTimedOut();
 
@@ -242,22 +245,21 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
         nonReentrant
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
+        address sender = _msgSender();
+        if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != ACTIVE) revert InvalidStatus();
         if (block.timestamp < uint256(d.expiry)) revert InvalidStatus();
 
         uint256 fee = d.verifierFee;
-        if (IERC20(feeToken).allowance(msg.sender, address(this)) < fee) revert InsufficientAllowance();
-        if (IERC20(feeToken).balanceOf(msg.sender) < fee) revert InsufficientBalance();
 
         d.status = VERIFYING;
         d.verificationTimestamp = uint48(block.timestamp);
-        d.requesterIsHolder = (msg.sender == d.holder);
+        d.requesterIsHolder = (sender == d.holder);
 
         emit VerificationRequested(dealIndex, verificationIndex, d.verifier);
 
         if (fee > 0) {
-            if (!IERC20(feeToken).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
+            if (!IERC20(feeToken).transferFrom(sender, address(this), fee)) revert TransferFailed();
         }
     }
 
@@ -301,7 +303,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
         nonReentrant
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
+        if (_msgSender() != d.holder && _msgSender() != d.writer) revert NotParty();
         if (d.status != VERIFYING) revert InvalidStatus();
         if (block.timestamp <= uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) {
             revert VerificationNotTimedOut();
@@ -323,24 +325,29 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
 
     function proposeSettlement(uint256 dealIndex, uint256 amountToHolder) external {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
+        address sender = _msgSender();
+        if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (_isSettlingTimedOut(d)) revert AlreadyTimedOut();
         if (amountToHolder > d.reservedCollateral) revert InvalidSettlement();
 
-        settlements[dealIndex] = SettlementProposal({
-            proposer: msg.sender,
-            amountToHolder: amountToHolder
-        });
+        SettlementProposal storage stl = settlements[dealIndex];
+        stl.proposer = sender;
+        stl.amountToHolder = amountToHolder;
+        stl.version += 1;
+
+        emit SettlementProposed(dealIndex, sender, amountToHolder);
     }
 
-    function confirmSettlement(uint256 dealIndex) external nonReentrant {
+    function confirmSettlement(uint256 dealIndex, uint256 expectedVersion) external nonReentrant {
         Deal storage d = deals[dealIndex];
         SettlementProposal storage stl = settlements[dealIndex];
-        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
+        address sender = _msgSender();
+        if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (stl.proposer == address(0)) revert InvalidSettlement();
-        if (msg.sender == stl.proposer) revert ProposerCannotConfirm();
+        if (stl.version != expectedVersion) revert VersionMismatch();
+        if (sender == stl.proposer) revert ProposerCannotConfirm();
 
         _executeSettlement(
             dealIndex,
@@ -354,7 +361,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable {
 
     function triggerSettlementTimeout(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
+        if (_msgSender() != d.holder && _msgSender() != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (!_isSettlingTimedOut(d)) revert SettlementNotTimedOut();
 
