@@ -269,10 +269,28 @@ def relay_check(contract: str, *, chain_id: int = 10) -> dict:
     except Exception as e:
         return {"available": False, "reason": f"cannot read trustedForwarder: {e}"}
 
+    # Check if the Vault has budget for this contract (sponsor has funded it)
+    try:
+        resp = httpx.get(
+            f"{_relayer_url()}/relay/vault-budget",
+            params={"contract": contract_addr},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            budget = data.get("budget")
+            if budget is None:
+                return {"available": False, "reason": "gas sponsor vault not configured"}
+            if int(budget) <= 0:
+                return {"available": False, "reason": "no sponsor budget for this contract"}
+    except Exception:
+        return {"available": False, "reason": "cannot query vault budget"}
+
     return {
         "available": True,
         "forwarder": forwarder,
         "relayer": _relayer_url(),
         "contract": contract,
         "chain_id": chain_id,
+        "budget": budget,
     }
