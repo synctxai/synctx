@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ from mcp.client.streamable_http import streamablehttp_client as streamable_http_
 from config import settings
 from signer import get_owner_address, sign_platform_message
 
-TOKEN_FILE = Path(__file__).parent / "auth_token.txt"
+TOKEN_FILE = Path(os.environ.get("AUTH_TOKENS_FILE", str(Path(__file__).parent / "auth_token.txt")))
 
 logger = logging.getLogger(__name__)
 

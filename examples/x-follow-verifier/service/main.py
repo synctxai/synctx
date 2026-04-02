@@ -7,6 +7,9 @@ import logging
 import signal
 import sys
 
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
+
 from config import settings
 from mcp_client import PlatformClient
 from handlers import handle_message

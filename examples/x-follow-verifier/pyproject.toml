@@ -9,6 +9,7 @@ dependencies = [
   "eth-account>=0.13.0",
   "web3>=7.0.0",
   "pydantic-settings>=2.7.0",
+  "exceptiongroup>=1.0; python_version<'3.11'",
 ]
 
 [tool.uv]

@@ -228,31 +228,49 @@ async def _check_follow_with_result(follower_user_id: str, target_user_id: str) 
     """Off-chain follow verification, returns (result_code, reason).
 
     result_code: 1=following, -1=not following, 0=inconclusive
+
+    Logic:
+        First check:
+          - any provider returns following → 1
+          - otherwise → retry after 5s
+        Retry:
+          - any provider returns following → 1
+          - at least one provider valid (not-following) → -1
+          - both providers failed → fall back to first check:
+              - first check had valid not-following → -1
+              - first check also both failed → 0
     """
+    # --- First check ---
+    first_valid = False  # True if at least one provider returned a valid result
     try:
         result = await is_following_by_user_ids(follower_user_id, target_user_id)
     except Exception as e:
-        logger.warning("Follow verification API exception, returning inconclusive: %s", e)
-        return 0, f"verification inconclusive: {e}"
+        logger.warning("Follow verification API exception: %s", e)
+        result = None
 
-    if result.error is not None:
-        logger.warning("Follow verification returned error, inconclusive: %s", result.error)
-        return 0, f"verification inconclusive: {result.error}"
+    if result is not None and result.error is None:
+        if result.following:
+            return 1, "follow verified"
+        first_valid = True
+    elif result is not None:
+        logger.warning("Follow verification returned error: %s", result.error)
 
-    if result.following:
-        return 1, "follow verified"
-
-    # Follow status may not be immediately reflected; retry once after 5s
-    logger.info("Follow not detected, retrying once after 5s...")
+    # --- Retry after 5s ---
+    logger.info("Follow not confirmed, retrying once after 5s...")
     await asyncio.sleep(5)
     try:
-        result = await is_following_by_user_ids(follower_user_id, target_user_id)
+        retry = await is_following_by_user_ids(follower_user_id, target_user_id)
     except Exception as e:
-        logger.warning("Retry API exception, returning inconclusive: %s", e)
-        return 0, f"verification inconclusive on retry: {e}"
+        logger.warning("Retry API exception: %s", e)
+        retry = None
 
-    if result.error is not None:
-        return 0, f"verification inconclusive on retry: {result.error}"
-    if result.following:
-        return 1, "follow verified (retry)"
-    return -1, "follow not detected"
+    if retry is not None and retry.error is None:
+        if retry.following:
+            return 1, "follow verified (retry)"
+        # Retry valid, not-following
+        return -1, "follow not detected"
+
+    # Retry both failed — fall back to first check
+    if first_valid:
+        return -1, "follow not detected"
+    return 0, "verification inconclusive"
