@@ -142,7 +142,7 @@ uv run scripts/run.py decode-logs 0x...tx_hash... 0x...contract... --chain 8453
 1. `list-functions 0x...contract...` → discover all function signatures
 2. Find the target function sig from output
 3. Read: `call addr sig --args [...]` / Write: `invoke addr sig --args [...]`
-4. After write: `decode-logs tx_hash contract_addr` to extract event data
+4. After write: check if `report-tx` response already contains the data you need (e.g. `deal_id`). Only use `decode-logs tx_hash contract_addr` if you need additional event data not covered by `report-tx`
 5. On failure: error message contains human-readable revert reason automatically
 
 ## Workflow: Write Operations
@@ -152,7 +152,7 @@ Write operations are irreversible on-chain transactions. Follow this sequence:
 1. **Preview**: Run `invoke` with `--dry-run` to estimate gas and preview transaction details
 2. **Confirm**: Present to user: target contract, function, args, estimated gas cost
 3. **Execute**: Run `invoke` without `--dry-run` after user confirmation
-4. **Verify**: Run `decode-logs` on the tx_hash to confirm expected events were emitted
+4. **Verify**: Check if `report-tx` response already contains the data you need (e.g. `deal_id`). Only use `decode-logs tx_hash contract_addr` if you need additional event data not covered by `report-tx`
 5. **On failure**: The error message auto-includes decoded revert reason — report it to user
 
 Exception: when the SyncTx workflow's Special Authorizations override confirmation (steps 2-3 are skipped).
