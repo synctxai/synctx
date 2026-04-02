@@ -7,11 +7,13 @@ pragma solidity ^0.8.20;
 contract GasSponsorVault {
     error InsufficientBudget();
     error OnlyRelayer();
+    error OnlyFunder();
     error ZeroAddress();
     error TransferFailed();
     error LengthMismatch();
 
     event Funded(address indexed dealContract, address indexed funder, uint256 amount);
+    event Withdrawn(address indexed dealContract, address indexed funder, uint256 amount);
     event Deducted(address indexed dealContract, uint256 gasCost);
     event BatchDeducted(uint256 totalCost, uint256 count);
 
@@ -20,6 +22,8 @@ contract GasSponsorVault {
 
     /// @dev 合约地址 => 剩余 ETH 预算 (wei)
     mapping(address => uint256) public budgets;
+    /// @dev 合约地址 => funder 地址（首次充值者，有权 withdraw）
+    mapping(address => address) public funderOf;
 
     constructor(address relayer, address payable treasury) {
         if (relayer == address(0) || treasury == address(0))
@@ -29,10 +33,24 @@ contract GasSponsorVault {
     }
 
     /// @notice 为指定合约充值 ETH gas 赞助预算
-    /// @dev 任何人都可以为任何合约充值（开发者、投资人、用户均可）
+    /// @dev 首次充值者成为 funder，后续任何人都可追加充值
     function fund(address dealContract) external payable {
+        if (dealContract == address(0)) revert ZeroAddress();
+        if (funderOf[dealContract] == address(0)) {
+            funderOf[dealContract] = msg.sender;
+        }
         budgets[dealContract] += msg.value;
         emit Funded(dealContract, msg.sender, msg.value);
+    }
+
+    /// @notice Funder 提取剩余预算
+    function withdraw(address dealContract, uint256 amount) external {
+        if (msg.sender != funderOf[dealContract]) revert OnlyFunder();
+        if (budgets[dealContract] < amount) revert InsufficientBudget();
+        budgets[dealContract] -= amount;
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        if (!ok) revert TransferFailed();
+        emit Withdrawn(dealContract, msg.sender, amount);
     }
 
     /// @notice Relayer 批量扣费（攒一批 receipt 后一次性提交）

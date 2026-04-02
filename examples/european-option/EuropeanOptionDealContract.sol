@@ -50,6 +50,8 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
     error InvalidSettlement();
     error VerificationNotTimedOut();
     error SettlementNotTimedOut();
+    error SettlementTimedOut();
+    error VerifierTimedOut();
     error Reentrancy();
     error VersionMismatch();
     error NotAdmin();
@@ -310,6 +312,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         Deal storage d = deals[dealIndex];
         if (msg.sender != d.verifier) revert NotVerifier();
         if (d.status != VERIFYING) revert InvalidStatus();
+        if (block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) revert VerifierTimedOut();
 
         d.verificationTimestamp = 0;
 
@@ -383,6 +386,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         address sender = _msgSender();
         if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
+        if (_isSettlingTimedOut(d)) revert SettlementTimedOut();
         if (stl.proposer == address(0)) revert InvalidSettlement();
         if (stl.version != expectedVersion) revert VersionMismatch();
         if (sender == stl.proposer) revert ProposerCannotConfirm();
