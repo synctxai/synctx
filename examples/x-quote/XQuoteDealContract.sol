@@ -256,7 +256,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             d.stageTimestamp = uint48(block.timestamp);
         }
 
-        _emitStateChanged(dealIndex, WAITING_ACCEPT);
+        _emitStatusChanged(dealIndex, WAITING_ACCEPT);
     }
 
     // ===================== 核心流程 =====================
@@ -275,7 +275,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         d.stageTimestamp = uint48(block.timestamp);
 
         _emitPhaseChanged(dealIndex, 2); // → Active
-        _emitStateChanged(dealIndex, WAITING_CLAIM);
+        _emitStatusChanged(dealIndex, WAITING_CLAIM);
 
         if (!IERC20(feeToken).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
     }
@@ -294,7 +294,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         d.status = WAITING_CONFIRM;
         d.stageTimestamp = uint48(block.timestamp);
 
-        _emitStateChanged(dealIndex, WAITING_CONFIRM);
+        _emitStatusChanged(dealIndex, WAITING_CONFIRM);
     }
 
     /// @notice A 手动确认并直接付款给 B（跳过验证）
@@ -310,7 +310,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         d.amount = 0;
         d.status = COMPLETED;
 
-        _emitStateChanged(dealIndex, COMPLETED);
+        _emitStatusChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
 
         if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
@@ -332,7 +332,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         d.status = CANCELLED;
 
         _emitPhaseChanged(dealIndex, 5); // → Cancelled
-        _emitStateChanged(dealIndex, CANCELLED);
+        _emitStatusChanged(dealIndex, CANCELLED);
 
         if (amt > 0) {
             if (!IERC20(feeToken).transfer(d.partyA, amt)) revert TransferFailed();
@@ -400,14 +400,14 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
         if (result > 0) {
-            _emitStateChanged(dealIndex, COMPLETED);
+            _emitStatusChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
         } else if (result < 0) {
             _emitViolated(dealIndex, d.partyB, reason);
-            _emitStateChanged(dealIndex, VIOLATED);
+            _emitStatusChanged(dealIndex, VIOLATED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
         } else {
-            _emitStateChanged(dealIndex, SETTLING);
+            _emitStatusChanged(dealIndex, SETTLING);
         }
 
         // --- 交互：所有转账最后执行 ---
@@ -449,7 +449,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         d.stageTimestamp = uint48(block.timestamp);
 
         _emitViolated(dealIndex, d.verifier, "verifier timeout");
-        _emitStateChanged(dealIndex, SETTLING);
+        _emitStatusChanged(dealIndex, SETTLING);
 
         if (vFee > 0) {
             if (!IERC20(feeToken).transfer(requester, vFee)) revert TransferFailed();
@@ -515,7 +515,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         delete settlementByA[dealIndex];
         delete settlementByB[dealIndex];
 
-        _emitStateChanged(dealIndex, COMPLETED);
+        _emitStatusChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
 
         if (toA > 0) {
@@ -553,7 +553,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         delete settlementByA[dealIndex];
         delete settlementByB[dealIndex];
 
-        _emitStateChanged(dealIndex, FORFEITED);
+        _emitStatusChanged(dealIndex, FORFEITED);
         _emitPhaseChanged(dealIndex, 4); // → Failed
 
         if (seized > 0) {
@@ -578,7 +578,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             d.status = VIOLATED;
             d.violator = d.partyB;
             _emitViolated(dealIndex, d.partyB, "claim timeout");
-            _emitStateChanged(dealIndex, VIOLATED);
+            _emitStatusChanged(dealIndex, VIOLATED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
 
         } else if (s == WAITING_CONFIRM) {
@@ -587,7 +587,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             uint96 amt = d.amount;
             d.amount = 0;
             d.status = COMPLETED;
-            _emitStateChanged(dealIndex, COMPLETED);
+            _emitStatusChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
             if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
 

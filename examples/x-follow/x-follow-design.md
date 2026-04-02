@@ -345,11 +345,11 @@ flowchart TD
 | Action | Events |
 |--------|--------|
 | `createDeal()` | `SubContractCreated(child)` (factory, protocol-level) |
-| `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
-| `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
-| `onVerificationResult(<0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
-| `onVerificationResult(==0)` | `VerificationReceived` → `DealStateChanged(5)` → `DealPhaseChanged(4)` |
-| `resetVerification()` | `DealStateChanged(4)` → `DealPhaseChanged(4)` |
+| `claim()` | `DealCreated` → `DealStatusChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
+| `onVerificationResult(>0)` | `VerificationReceived` → `DealStatusChanged(2)` → `DealPhaseChanged(3)` |
+| `onVerificationResult(<0)` | `VerificationReceived` → `DealStatusChanged(3)` → `DealPhaseChanged(4)` |
+| `onVerificationResult(==0)` | `VerificationReceived` → `DealStatusChanged(5)` → `DealPhaseChanged(4)` |
+| `resetVerification()` | `DealStatusChanged(4)` → `DealPhaseChanged(4)` |
 
 ### 6.6 Claim Eligibility
 

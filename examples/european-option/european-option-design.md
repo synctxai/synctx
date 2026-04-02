@@ -175,14 +175,14 @@ sequenceDiagram
 
     Note over H,D: 3. 期权买方创建 deal 并锁定 premium
     H->>D: 🟢 createDeal(...)
-    Note over D: 期权买方的 premium 已转入<br/>🔵 DealCreated<br/>🔵 DealStateChanged(WAITING_ACCEPT)
+    Note over D: 期权买方的 premium 已转入<br/>🔵 DealCreated<br/>🔵 DealStatusChanged(WAITING_ACCEPT)
     H->>P: 🟣 report_transaction(tx_hash, chain_id)
     H->>P: 🟣 send_message [通知期权卖方: deal 已创建]
     P-->>W: 异步消息
 
     Note over W,D: 4. 期权卖方接受并锁定 collateral
     W->>D: 🟢 accept(dealIndex)
-    Note over D: 期权卖方的 collateral 已转入<br/>🔵 DealPhaseChanged(2)<br/>🔵 DealStateChanged(ACTIVE)
+    Note over D: 期权卖方的 collateral 已转入<br/>🔵 DealPhaseChanged(2)<br/>🔵 DealStatusChanged(ACTIVE)
     W->>P: 🟣 report_transaction(tx_hash, chain_id)
 
     Note over H,W: 5. 等待到期
@@ -199,13 +199,13 @@ sequenceDiagram
 
     alt 结算价可用
         V->>D: 🟢 reportSettlementPrice(...)
-        Note over D: 从 verifier 读取 settlementPriceOf(...)<br/>自动结算 payoff<br/>🔵 VerificationReceived<br/>🔵 DealStateChanged(COMPLETED)<br/>🔵 DealPhaseChanged(3)
+        Note over D: 从 verifier 读取 settlementPriceOf(...)<br/>自动结算 payoff<br/>🔵 VerificationReceived<br/>🔵 DealStatusChanged(COMPLETED)<br/>🔵 DealPhaseChanged(3)
     else 结果不确定
         V->>D: 🟢 reportInconclusive(...)
-        Note over D: 进入 Settling<br/>🔵 VerificationReceived<br/>🔵 DealStateChanged(SETTLING)
+        Note over D: 进入 Settling<br/>🔵 VerificationReceived<br/>🔵 DealStatusChanged(SETTLING)
     else 验证失败
         V->>D: 🟢 reportFailure(...)
-        Note over D: 进入 Settling<br/>🔵 VerificationReceived<br/>🔵 DealStateChanged(SETTLING)
+        Note over D: 进入 Settling<br/>🔵 VerificationReceived<br/>🔵 DealStatusChanged(SETTLING)
     end
     V->>P: 🟣 report_transaction(tx_hash, chain_id)
 ```
@@ -216,7 +216,7 @@ sequenceDiagram
 
 ### 5.1 状态枚举
 
-| stateIndex | 状态 | 含义 |
+| statusIndex | 状态 | 含义 |
 |-----------|-------|---------|
 | 0 | WaitingAccept | 期权买方已创建 deal，等待期权卖方接受 |
 | 1 | Active | 期权卖方已接受，期权在到期前处于生效状态 |
@@ -281,7 +281,7 @@ sequenceDiagram
 
     Note over H,D: 期权卖方未在 ACCEPT_TIMEOUT 内接受
     H->>D: 🟢 cancelDeal(dealIndex)
-    Note over D: 向期权买方退回 premium<br/>🔵 DealPhaseChanged(5)<br/>🔵 DealStateChanged(CANCELLED)
+    Note over D: 向期权买方退回 premium<br/>🔵 DealPhaseChanged(5)<br/>🔵 DealStatusChanged(CANCELLED)
 ```
 
 结果：
@@ -299,7 +299,7 @@ sequenceDiagram
 
     Note over P,D: verifier 未在 VERIFICATION_TIMEOUT 内响应
     P->>D: 🟢 resetVerification(dealIndex, 0)
-    Note over D: 向请求方退回 verifierFee<br/>🔵 DealStateChanged(SETTLING)
+    Note over D: 向请求方退回 verifierFee<br/>🔵 DealStatusChanged(SETTLING)
 ```
 
 结果：
@@ -315,7 +315,7 @@ sequenceDiagram
     participant D as DealContract
 
     V->>D: 🟢 reportInconclusive(...) / reportFailure(...)
-    Note over D: 继续锁定 premium + collateral<br/>🔵 VerificationReceived<br/>🔵 DealStateChanged(SETTLING)
+    Note over D: 继续锁定 premium + collateral<br/>🔵 VerificationReceived<br/>🔵 DealStatusChanged(SETTLING)
 ```
 
 结果：
@@ -333,7 +333,7 @@ sequenceDiagram
 
     H->>D: 🟢 proposeSettlement(dealIndex, amountToHolder)
     W->>D: 🟢 confirmSettlement(dealIndex)
-    Note over D: 按方案划转 collateral，并将 premium 给期权卖方<br/>🔵 DealStateChanged(COMPLETED)<br/>🔵 DealPhaseChanged(3)
+    Note over D: 按方案划转 collateral，并将 premium 给期权卖方<br/>🔵 DealStatusChanged(COMPLETED)<br/>🔵 DealPhaseChanged(3)
 ```
 
 结果：
@@ -352,7 +352,7 @@ sequenceDiagram
 
     Note over P,D: 未在 SETTLING_TIMEOUT 内达成一致
     P->>D: 🟢 triggerSettlementTimeout(dealIndex)
-    Note over D: 向期权买方退回 premium<br/>向期权卖方退回 collateral<br/>🔵 DealStateChanged(UNWOUND)<br/>🔵 DealPhaseChanged(4)
+    Note over D: 向期权买方退回 premium<br/>向期权卖方退回 collateral<br/>🔵 DealStatusChanged(UNWOUND)<br/>🔵 DealPhaseChanged(4)
 ```
 
 结果：

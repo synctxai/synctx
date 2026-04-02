@@ -345,11 +345,11 @@ flowchart TD
 | 操作 | 事件 |
 |------|------|
 | `createDeal()` | `SubContractCreated(child)`（工厂，协议级） |
-| `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
-| `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
-| `onVerificationResult(<0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
-| `onVerificationResult(==0)` | `VerificationReceived` → `DealStateChanged(5)` → `DealPhaseChanged(4)` |
-| `resetVerification()` | `VerifierTimeout` → `DealStateChanged(4)` → `DealPhaseChanged(4)` |
+| `claim()` | `DealCreated` → `DealStatusChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
+| `onVerificationResult(>0)` | `VerificationReceived` → `DealStatusChanged(2)` → `DealPhaseChanged(3)` |
+| `onVerificationResult(<0)` | `VerificationReceived` → `DealStatusChanged(3)` → `DealPhaseChanged(4)` |
+| `onVerificationResult(==0)` | `VerificationReceived` → `DealStatusChanged(5)` → `DealPhaseChanged(4)` |
+| `resetVerification()` | `VerifierTimeout` → `DealStatusChanged(4)` → `DealPhaseChanged(4)` |
 
 ### 6.6 Claim 资格
 

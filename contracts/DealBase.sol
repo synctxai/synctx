@@ -62,8 +62,8 @@ abstract contract DealBase is IDeal {
     }
 
     /// @dev 发出状态变更通知
-    function _emitStateChanged(uint256 dealIndex, uint8 stateIndex) internal {
-        emit DealStateChanged(dealIndex, stateIndex);
+    function _emitStatusChanged(uint256 dealIndex, uint8 statusIndex) internal {
+        emit DealStatusChanged(dealIndex, statusIndex);
     }
 
     /// @dev 发出违约标记

@@ -129,8 +129,8 @@ interface IDeal {
     // --- 业务状态与验证事件 ---
 
     /// @notice 每次业务状态转换时发出
-    /// @param stateIndex dealStatus 基础值（存储写入时的状态码）
-    event DealStateChanged(uint256 indexed dealIndex, uint8 stateIndex);
+    /// @param statusIndex dealStatus 基础值（存储写入时的状态码）
+    event DealStatusChanged(uint256 indexed dealIndex, uint8 statusIndex);
 
     /// @notice 收到验证结果时发出
     event VerificationReceived(uint256 indexed dealIndex, uint256 verificationIndex, address indexed verifier, int8 result);

@@ -265,7 +265,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         claimedUserId[followerUserId] = 1;
         pendingClaims++;
 
-        _emitStateChanged(dealIndex, VERIFYING);
+        _emitStatusChanged(dealIndex, VERIFYING);
         _emitPhaseChanged(dealIndex, 2); // → Active
 
         emit VerificationRequested(dealIndex, 0, verifier);
@@ -299,7 +299,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
             claimedUserId[c.follower_user_id] = 2;
             completedClaims++;
 
-            _emitStateChanged(dealIndex, COMPLETED);
+            _emitStatusChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
 
             if (!IERC20(feeToken).transfer(claimer, reward)) revert TransferFailed();
@@ -316,7 +316,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
             budget += reward + pFee;
 
             _emitViolated(dealIndex, claimer, "follow not detected");
-            _emitStateChanged(dealIndex, REJECTED);
+            _emitStatusChanged(dealIndex, REJECTED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
 
             if (vFee > 0) {
@@ -329,7 +329,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
             claimedUserId[c.follower_user_id] = 0;
             budget += reward + vFee + pFee;
 
-            _emitStateChanged(dealIndex, INCONCLUSIVE);
+            _emitStatusChanged(dealIndex, INCONCLUSIVE);
             _emitPhaseChanged(dealIndex, 4); // → Failed
         }
 
@@ -359,7 +359,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
         emit VerifierTimeout(dealIndex, verifier);
         _emitViolated(dealIndex, verifier, "verifier timeout");
-        _emitStateChanged(dealIndex, TIMED_OUT);
+        _emitStatusChanged(dealIndex, TIMED_OUT);
         _emitPhaseChanged(dealIndex, 4); // → Failed
 
         _checkAndClose();

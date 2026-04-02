@@ -236,7 +236,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         d.signatureDeadline = p.verifierDeadline;
         d.verifierSignature = p.verifierSig;
 
-        _emitStateChanged(dealIndex, WAITING_ACCEPT);
+        _emitStatusChanged(dealIndex, WAITING_ACCEPT);
     }
 
     function accept(uint256 dealIndex) external nonReentrant {
@@ -255,7 +255,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         d.status = ACTIVE;
 
         _emitPhaseChanged(dealIndex, 2);
-        _emitStateChanged(dealIndex, ACTIVE);
+        _emitStatusChanged(dealIndex, ACTIVE);
     }
 
     function cancelDeal(uint256 dealIndex) external nonReentrant {
@@ -269,7 +269,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         d.status = CANCELLED;
 
         _emitPhaseChanged(dealIndex, 5);
-        _emitStateChanged(dealIndex, CANCELLED);
+        _emitStatusChanged(dealIndex, CANCELLED);
 
         if (premium > 0) {
             if (!IERC20(feeToken).transfer(d.holder, premium)) revert TransferFailed();
@@ -328,7 +328,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         d.settlingTimestamp = uint48(block.timestamp);
 
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
-        _emitStateChanged(dealIndex, SETTLING);
+        _emitStatusChanged(dealIndex, SETTLING);
 
         if (verifierFee > 0) {
             if (!IERC20(feeToken).transfer(msg.sender, verifierFee)) revert TransferFailed();
@@ -354,7 +354,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         d.status = SETTLING;
         d.settlingTimestamp = uint48(block.timestamp);
 
-        _emitStateChanged(dealIndex, SETTLING);
+        _emitStatusChanged(dealIndex, SETTLING);
 
         if (verifierFee > 0) {
             if (!IERC20(feeToken).transfer(requester, verifierFee)) revert TransferFailed();
@@ -412,7 +412,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         d.status = UNWOUND;
         delete settlements[dealIndex];
 
-        _emitStateChanged(dealIndex, UNWOUND);
+        _emitStatusChanged(dealIndex, UNWOUND);
         _emitPhaseChanged(dealIndex, 4);
 
         if (premium > 0) {
@@ -471,7 +471,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         d.reservedCollateral = 0;
         d.status = COMPLETED;
 
-        _emitStateChanged(dealIndex, COMPLETED);
+        _emitStatusChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3);
 
         if (collateralToHolder > 0) {
