@@ -37,7 +37,6 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     error TransferFailed();
     error ViolatorCannot();
     error VerificationNotTimedOut();
-    error ProposerCannotConfirm();
     error InvalidSettlement();
     error SettlementNotTimedOut();
     error FeeTooLow();
@@ -47,10 +46,11 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     error SignatureExpired();
     error InvalidVerificationIndex();
     error InvalidSpecAddress();
-    error InsufficientAllowance();
-    error InsufficientBalance();
     error NotVerified();
     error InvalidBindingSignature();
+    error Reentrancy();
+    error FeeTokenNotSet();
+    error VersionMismatch();
 
     // ===================== dealStatus 常量 =====================
     // 基础值（可写入存储）和派生值（仅由 dealStatus() 运行时计算）。
@@ -117,6 +117,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     struct Settlement {
         address proposer;     // 20 字节 — 提案方
         uint96  amountToA;    // 12 字节 — 提议给 A 的金额（剩余归 B）
+        uint256 version;      // 提案版本号，每次提案 +1
     }
 
     // ===================== 常量 =====================
@@ -125,6 +126,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     uint256 public constant STAGE_TIMEOUT = 30 minutes;
     uint256 public constant VERIFICATION_TIMEOUT = 30 minutes;
     uint256 public constant SETTLING_TIMEOUT = 12 hours;
+    uint256 public constant CONFIRM_GRACE_PERIOD = 1 hours;
 
     address public immutable FEE_COLLECTOR;
     uint96 public immutable PROTOCOL_FEE;
@@ -133,8 +135,11 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 存储 =====================
 
+    uint256 private _lock;
+
     mapping(uint256 => Deal) internal deals;
-    mapping(uint256 => Settlement) internal settlements;
+    mapping(uint256 => Settlement) internal settlementByA;
+    mapping(uint256 => Settlement) internal settlementByB;
 
     // ===================== 修饰器 =====================
 
@@ -163,6 +168,13 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         _;
     }
 
+    modifier nonReentrant() {
+        if (_lock == 1) revert Reentrancy();
+        _lock = 1;
+        _;
+        _lock = 0;
+    }
+
     // ===================== 构造函数 =====================
 
     constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address bindingAttestation) {
@@ -171,7 +183,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             revert InvalidFeeCollector();
         }
         if (protocolFee_ < MIN_PROTOCOL_FEE) revert FeeTooLow();
-        if (requiredSpec == address(0)) revert InvalidSpecAddress();
+        if (requiredSpec == address(0) || requiredSpec.code.length == 0) revert InvalidSpecAddress();
         if (bindingAttestation == address(0) || bindingAttestation.code.length == 0) revert InvalidParams();
         FEE_COLLECTOR = feeCollector;
         PROTOCOL_FEE = protocolFee_;
@@ -194,8 +206,9 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         string calldata tweet_id,
         uint64  quoterUserId,
         bytes calldata bindingSig
-    ) external returns (uint256 dealIndex) {
+    ) external nonReentrant returns (uint256 dealIndex) {
         // --- 参数校验 ---
+        if (feeToken == address(0)) revert FeeTokenNotSet();
         address sender = _msgSender();
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
         if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
@@ -251,6 +264,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @notice B 接受交易
     function accept(uint256 dealIndex)
         external
+        nonReentrant
         onlyB(dealIndex)
         atStatus(dealIndex, WAITING_ACCEPT)
         notTimedOut(dealIndex)
@@ -286,8 +300,10 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @notice A 手动确认并直接付款给 B（跳过验证）
     function confirmAndPay(uint256 dealIndex)
         external
+        nonReentrant
         onlyA(dealIndex)
         atStatus(dealIndex, WAITING_CONFIRM)
+        notTimedOut(dealIndex)
     {
         Deal storage d = deals[dealIndex];
         uint96 amt = d.amount;
@@ -328,6 +344,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @notice Trader 触发验证（调用者通过 approve 支付验证费）
     function requestVerification(uint256 dealIndex, uint256 verificationIndex)
         external
+        nonReentrant
         override
         atStatus(dealIndex, WAITING_CONFIRM)
         onlySlot0(verificationIndex)
@@ -339,9 +356,6 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
         uint96 fee = d.verifierFee;
         address verifier = d.verifier;
-
-        if (IERC20(feeToken).allowance(sender, address(this)) < fee) revert InsufficientAllowance();
-        if (IERC20(feeToken).balanceOf(sender) < fee) revert InsufficientBalance();
 
         // CEI：先改状态
         d.status = VERIFYING;
@@ -357,11 +371,12 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @dev result > 0 → 通过，付款给 B
     ///      result < 0 → 失败，B 违约
     ///      result == 0 → 不确定，进入协商
-    function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason) external override onlySlot0(verificationIndex) {
+    function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason) external nonReentrant override onlySlot0(verificationIndex) {
         Deal storage d = deals[dealIndex];
 
         if (msg.sender != d.verifier) revert NotVerifier();
         if (d.status != VERIFYING) revert InvalidStatus();
+        if (block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) revert AlreadyTimedOut();
 
         // 清除验证时间戳
         d.verificationTimestamp = 0;
@@ -397,7 +412,13 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
         // --- 交互：所有转账最后执行 ---
         if (vFee > 0) {
-            if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
+            if (result == 0) {
+                // inconclusive — 验证者未完成工作，退还 verifierFee 给请求方
+                address requester = d.isRequesterA ? d.partyA : d.partyB;
+                if (!IERC20(feeToken).transfer(requester, vFee)) revert TransferFailed();
+            } else {
+                if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
+            }
         }
         if (transferToB > 0) {
             if (!IERC20(feeToken).transfer(d.partyB, transferToB)) revert TransferFailed();
@@ -409,6 +430,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @notice Verifier 超时后重置验证，退还验证费，进入协商
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
         external
+        nonReentrant
         atStatus(dealIndex, VERIFYING)
         onlySlot0(verificationIndex)
     {
@@ -426,6 +448,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         d.status = SETTLING;
         d.stageTimestamp = uint48(block.timestamp);
 
+        _emitViolated(dealIndex, d.verifier, "verifier timeout");
         _emitStateChanged(dealIndex, SETTLING);
 
         if (vFee > 0) {
@@ -436,6 +459,8 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     // ===================== 协商 =====================
 
     /// @notice 提出协商方案：amountToA 是给 A 的金额（剩余归 B）
+    /// @dev 双提案模式：A/B 各自维护独立提案，互不覆盖。12h 后禁止新提案。
+    ///      每次提案版本号 +1，确认时需附带版本号防止前端运行覆盖。
     function proposeSettlement(uint256 dealIndex, uint96 amountToA)
         external
         atStatus(dealIndex, SETTLING)
@@ -446,32 +471,49 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
         if (amountToA > d.amount) revert InvalidSettlement();
 
-        settlements[dealIndex] = Settlement({
-            proposer: sender,
-            amountToA: amountToA
-        });
+        if (sender == d.partyA) {
+            Settlement storage s = settlementByA[dealIndex];
+            s.proposer = sender;
+            s.amountToA = amountToA;
+            s.version += 1;
+        } else {
+            Settlement storage s = settlementByB[dealIndex];
+            s.proposer = sender;
+            s.amountToA = amountToA;
+            s.version += 1;
+        }
 
+        emit SettlementProposed(dealIndex, sender, amountToA);
     }
 
     /// @notice 确认对方的协商提案
-    function confirmSettlement(uint256 dealIndex)
+    /// @dev 12h 内正常确认；12h~13h grace period 内仍可确认已有提案（但不可提新案）；13h 后封锁。
+    /// @param expectedVersion 期望的提案版本号，防止前端运行覆盖
+    function confirmSettlement(uint256 dealIndex, uint256 expectedVersion)
         external
+        nonReentrant
         atStatus(dealIndex, SETTLING)
     {
         Deal storage d = deals[dealIndex];
-        Settlement storage stl = settlements[dealIndex];
         address sender = _msgSender();
-
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (sender == stl.proposer) revert ProposerCannotConfirm();
+
+        // 获取对方的提案
+        Settlement storage stl = (sender == d.partyA) ? settlementByB[dealIndex] : settlementByA[dealIndex];
         if (stl.proposer == address(0)) revert InvalidSettlement();
+        if (stl.version != expectedVersion) revert VersionMismatch();
+
+        // 超时检查：12h 内 OK；12h~13h grace OK；13h 后封锁
+        uint256 graceDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT + CONFIRM_GRACE_PERIOD;
+        if (block.timestamp > graceDeadline) revert AlreadyTimedOut();
 
         uint96 toA = stl.amountToA;
         uint96 toB = d.amount - toA;
         d.amount = 0;
         d.status = COMPLETED;
 
-        delete settlements[dealIndex];
+        delete settlementByA[dealIndex];
+        delete settlementByB[dealIndex];
 
         _emitStateChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
@@ -485,19 +527,31 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     /// @notice 协商超时，资金没收到 FeeCollector
+    /// @dev 有提案时需等 grace period (13h) 过后；无提案时 12h 后即可触发。
     function triggerSettlementTimeout(uint256 dealIndex)
         external
+        nonReentrant
         atStatus(dealIndex, SETTLING)
     {
         Deal storage d = deals[dealIndex];
         address sender = _msgSender();
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
-        if (block.timestamp <= uint256(d.stageTimestamp) + SETTLING_TIMEOUT) revert SettlementNotTimedOut();
+
+        uint256 settlingDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT;
+        bool hasProposal = settlementByA[dealIndex].proposer != address(0)
+                        || settlementByB[dealIndex].proposer != address(0);
+
+        if (hasProposal) {
+            if (block.timestamp <= settlingDeadline + CONFIRM_GRACE_PERIOD) revert SettlementNotTimedOut();
+        } else {
+            if (block.timestamp <= settlingDeadline) revert SettlementNotTimedOut();
+        }
 
         uint96 seized = d.amount;
         d.amount = 0;
         d.status = FORFEITED;
-        delete settlements[dealIndex];
+        delete settlementByA[dealIndex];
+        delete settlementByB[dealIndex];
 
         _emitStateChanged(dealIndex, FORFEITED);
         _emitPhaseChanged(dealIndex, 4); // → Failed
@@ -512,7 +566,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @notice 触发当前阶段的超时处理
     /// @dev WAITING_CLAIM 超时：B 未 claimDone → B 违约
     ///      WAITING_CONFIRM 超时：A 未确认 → 自动付款给 B
-    function triggerTimeout(uint256 dealIndex) external {
+    function triggerTimeout(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
         if (!_isStageTimedOut(dealIndex)) revert NotTimedOut();
 
@@ -543,7 +597,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     /// @notice 违约后提取资金
-    function withdraw(uint256 dealIndex) external atStatus(dealIndex, VIOLATED) {
+    function withdraw(uint256 dealIndex) external nonReentrant atStatus(dealIndex, VIOLATED) {
         Deal storage d = deals[dealIndex];
         address sender = _msgSender();
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
@@ -588,7 +642,9 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         if (d.status == VERIFYING && d.verificationTimestamp > 0) {
             deadline_ = uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT;
         } else if (d.status == SETTLING) {
-            deadline_ = uint256(d.stageTimestamp) + SETTLING_TIMEOUT;
+            bool hasProposal = settlementByA[dealIndex].proposer != address(0)
+                            || settlementByB[dealIndex].proposer != address(0);
+            deadline_ = uint256(d.stageTimestamp) + SETTLING_TIMEOUT + (hasProposal ? CONFIRM_GRACE_PERIOD : 0);
         } else {
             deadline_ = uint256(d.stageTimestamp) + STAGE_TIMEOUT;
         }
@@ -603,16 +659,21 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         return block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT;
     }
 
-    /// @notice 获取协商提案信息
+    /// @notice 获取双方协商提案信息
     function settlement(uint256 dealIndex) external view returns (
-        address proposer,
-        uint96  amountToA,
-        uint96  amountToB
+        uint96  proposalByA_amountToA,
+        uint96  proposalByB_amountToA,
+        bool    hasProposalA,
+        bool    hasProposalB
     ) {
-        Settlement storage stl = settlements[dealIndex];
-        if (stl.proposer == address(0)) return (address(0), 0, 0);
-        uint96 total = deals[dealIndex].amount;
-        return (stl.proposer, stl.amountToA, total - stl.amountToA);
+        Settlement storage stlA = settlementByA[dealIndex];
+        Settlement storage stlB = settlementByB[dealIndex];
+        return (
+            stlA.amountToA,
+            stlB.amountToA,
+            stlA.proposer != address(0),
+            stlB.proposer != address(0)
+        );
     }
 
     /// @notice 检查交易阶段是否已超时
@@ -730,20 +791,20 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             "| 6 | Verifying | Wait | Wait |\n"
             "| 7 | VerifierTimedOut | `resetVerification(dealIndex, 0)` | `resetVerification(dealIndex, 0)` |\n"
             "| 8 | Settling | `proposeSettlement(dealIndex, amountToA)` | `proposeSettlement(dealIndex, amountToA)` |\n"
-            "| 9 | SettlementProposed | `confirmSettlement(dealIndex)` or counter-propose | `confirmSettlement(dealIndex)` or counter-propose |\n"
-            "| 10 | SettlementTimedOut | `confirmSettlement(dealIndex)` or `triggerSettlementTimeout(dealIndex)` | `confirmSettlement(dealIndex)` or `triggerSettlementTimeout(dealIndex)` |\n"
+            "| 9 | SettlementProposed | `confirmSettlement(dealIndex)` to accept counterparty's proposal, or update own proposal | `confirmSettlement(dealIndex)` to accept counterparty's proposal, or update own proposal |\n"
+            "| 10 | SettlementTimedOut | `triggerSettlementTimeout(dealIndex)` | `triggerSettlementTimeout(dealIndex)` |\n"
             "| 11 | Completed | -- | -- |\n"
             "| 12 | Violated | Non-violator: `withdraw(dealIndex)` | Non-violator: `withdraw(dealIndex)` |\n"
             "| 13 | Cancelled | -- | -- |\n"
             "| 14 | Forfeited | -- (funds seized to protocol) | -- (funds seized to protocol) |\n"
             "| 255 | NotFound | Deal does not exist | Deal does not exist |\n\n"
             "> **Timeouts**: 30 minutes per stage (Settling: 12 hours). Use `timeRemaining(dealIndex)` to query remaining seconds.\n\n"
-            "> **Settlement timeout (code 10)**: After 12 hours, new proposals are blocked. Pending proposals can still be confirmed. Either party can call `triggerSettlementTimeout` to forfeit all funds to the protocol (Forfeited).\n\n"
+            "> **Settlement timeout (code 10)**: After 12 hours, new proposals are blocked. If any proposal exists, a 1-hour grace period allows `confirmSettlement` only. After the grace period (or immediately if no proposals), `triggerSettlementTimeout` forfeits all funds to the protocol.\n\n"
             "> **Verification flow (code 4)**:\n"
             "> 1. `requestVerification(dealIndex, 0)`\n"
             "> 2. **Must** call `notify_verifier(verifier_address, dealContract, dealIndex, verificationIndex)` to notify the verifier\n"
             "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
-            "> **Settlement semantics (code 8/9)**: In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B.\n\n"
+            "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. `confirmSettlement` accepts the counterparty's proposal.\n\n"
             "## Gasless Transactions\n\n"
             "If `trustedForwarder()` returns a non-zero address, all write operations can be executed gaslessly via the relayer. "
             "Use `relay` instead of `invoke` in the wallet skill -- the CLI handles EIP-712 signing and submission automatically.\n";
@@ -799,8 +860,15 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
         // SETTLING (8) → 可能有提案 (9) 或超时 (10)
         if (s == SETTLING) {
-            if (_isStageTimedOut(dealIndex)) return SETTLEMENT_TIMED_OUT;
-            if (settlements[dealIndex].proposer != address(0)) return SETTLEMENT_PROPOSED;
+            bool hasProposal = settlementByA[dealIndex].proposer != address(0)
+                            || settlementByB[dealIndex].proposer != address(0);
+            uint256 settlingDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT;
+            if (hasProposal) {
+                if (block.timestamp > settlingDeadline + CONFIRM_GRACE_PERIOD) return SETTLEMENT_TIMED_OUT;
+            } else {
+                if (block.timestamp > settlingDeadline) return SETTLEMENT_TIMED_OUT;
+            }
+            if (hasProposal) return SETTLEMENT_PROPOSED;
             return SETTLING;
         }
 
