@@ -31,9 +31,11 @@ class VerifyResult:
     error: Optional[str] = None
     error_known: bool = False
 
+    reason: Optional[str] = None
+
     @staticmethod
-    def success(verified: bool) -> VerifyResult:
-        return VerifyResult(verified=verified)
+    def success(verified: bool, reason: Optional[str] = None) -> VerifyResult:
+        return VerifyResult(verified=verified, reason=reason)
 
     @staticmethod
     def unknown_error(msg: str) -> VerifyResult:

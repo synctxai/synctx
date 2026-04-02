@@ -89,16 +89,19 @@ async def _verify(
         return result
 
     if result is None:
-        return VerifyResult.success(False)
+        return VerifyResult.success(False, "tweet does not exist")
 
     info: TweetInfo = result
     norm_user_id = normalise_user_id(quoter_user_id)
-    verified = (
-        info.author_user_id == norm_user_id
-        and type_check(info)
-        and info.quoted_tweet_id == target_tweet_id
-    )
-    return VerifyResult.success(verified)
+
+    if info.author_user_id != norm_user_id:
+        return VerifyResult.success(False, "wrong author")
+    if not type_check(info):
+        return VerifyResult.success(False, "not a quote tweet")
+    if info.quoted_tweet_id != target_tweet_id:
+        return VerifyResult.success(False, "quoted wrong tweet")
+
+    return VerifyResult.success(True)
 
 
 async def has_quote(quoter_user_id: str, target_tweet_id: str, new_tweet_id: str) -> VerifyResult:

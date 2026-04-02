@@ -210,8 +210,16 @@ async def _check_tweet_with_result(quoter_user_id: str, target_tweet_id: str, ne
     if result.verified:
         return 1, "quote tweet verified"
 
+    first_reason = result.reason or "quote tweet not found"
+
+    # Deterministic failures: the tweet was found but doesn't meet the criteria.
+    # These won't change on retry, so return -1 immediately.
+    _deterministic_reasons = {"wrong author", "not a quote tweet", "quoted wrong tweet"}
+    if first_reason in _deterministic_reasons:
+        return -1, first_reason
+
     # Third-party API may not have synced the tweet yet; retry once after 5s
-    logger.info("Quote tweet not found, retrying once after 5s...")
+    logger.info("Quote tweet verification failed (%s), retrying once after 5s...", first_reason)
     await asyncio.sleep(5)
     try:
         result = await has_quote(quoter_user_id, target_tweet_id, quote_tweet_id)
@@ -223,4 +231,4 @@ async def _check_tweet_with_result(quoter_user_id: str, target_tweet_id: str, ne
         return 0, f"verification inconclusive on retry: {result.error}"
     if result.verified:
         return 1, "quote tweet verified (retry)"
-    return -1, "quote tweet not found"
+    return -1, result.reason or first_reason
