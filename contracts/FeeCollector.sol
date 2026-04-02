@@ -12,6 +12,7 @@ contract FeeCollector is Initializable {
     error ZeroAddress();       // 地址为零
     error BelowThreshold();    // 余额低于归集阈值
     error TransferFailed();    // 转账失败
+    error FeeTokenNotSet();    // feeToken 未设置
 
     event FeeSwept(address indexed recipient, uint256 amount);
 
@@ -31,6 +32,7 @@ contract FeeCollector is Initializable {
     /// @notice 将所有累积的 USDC 归集到 RECIPIENT
     /// @dev 任何人都可以调用，余额必须 ≥ SWEEP_THRESHOLD
     function sweepFees() external {
+        if (feeToken == address(0)) revert FeeTokenNotSet();
         uint256 vaultBalance = IERC20(feeToken).balanceOf(address(this));
         if (vaultBalance < SWEEP_THRESHOLD) revert BelowThreshold();
         if (!IERC20(feeToken).transfer(RECIPIENT, vaultBalance)) revert TransferFailed();
@@ -39,6 +41,7 @@ contract FeeCollector is Initializable {
 
     /// @notice 查询当前累积的 USDC 余额
     function balance() external view returns (uint256) {
+        if (feeToken == address(0)) revert FeeTokenNotSet();
         return IERC20(feeToken).balanceOf(address(this));
     }
 }

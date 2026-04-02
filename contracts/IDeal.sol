@@ -66,7 +66,7 @@ interface IDeal {
     /// @return verifier  该槽位的 Verifier 合约地址
     /// @return fee       验证费用（USDC 原始值）
     /// @return deadline  签名过期时间（Unix 秒）
-    /// @return sig       Verifier owner 的 EIP-712 签名
+    /// @return sig       Verifier signer 的 EIP-712 签名
     /// @return specParams 业务参数（abi.encode 编码，格式由各合约在 instruction() 中文档化）
     function verificationParams(uint256 dealIndex, uint256 verificationIndex)
         external view returns (
@@ -129,4 +129,7 @@ interface IDeal {
         uint256 verificationIndex,
         address indexed verifier
     );
+
+    /// @notice 协商提案提交时发出
+    event SettlementProposed(uint256 indexed dealIndex, address indexed proposer, uint256 amountToA);
 }

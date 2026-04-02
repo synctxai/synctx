@@ -23,6 +23,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
     error SignerMustBeEOA();   // signer 必须是 EOA（用于 EIP-712 签名）
     error NoPendingOwner();    // 没有待确认的 pendingOwner
     error FeeNotReceived();    // DealContract 未支付预期的验证费
+    error FeeTokenNotSet();    // feeToken 未设置
 
     // ============ 事件 ============
 
@@ -131,6 +132,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
         string calldata reason,
         uint256 expectedFee
     ) external override onlySigner {
+        if (feeToken == address(0)) revert FeeTokenNotSet();
         uint256 balBefore = IERC20(feeToken).balanceOf(address(this));
         IDeal(dealContract).onVerificationResult(dealIndex, verificationIndex, result, reason);
         if (IERC20(feeToken).balanceOf(address(this)) - balBefore < expectedFee) revert FeeNotReceived();
@@ -161,6 +163,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
 
     /// @notice 从此合约提取 USDC（仅 owner）
     function withdrawFees(address to, uint256 amount) external onlyOwner {
+        if (feeToken == address(0)) revert FeeTokenNotSet();
         if (to == address(0)) revert ZeroAddress();
         if (!IERC20(feeToken).transfer(to, amount)) revert WithdrawFailed();
     }
