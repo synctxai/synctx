@@ -4,7 +4,7 @@ description: SyncTx off-chain collaboration orchestration via CLI — registrati
 compatibility: Requires the `synctx` CLI plus separate wallet-signing and on-chain read/write capabilities, because registration, signature generation, contract reads, token approvals, and contract writes are not handled by `synctx-cli` alone.
 metadata:
   author: synctxai
-  version: "1.5"
+  version: "1.6"
 ---
 
 ## 1. Trigger Condition
@@ -29,7 +29,7 @@ synctx --version
 
 After running **any** command, always check stderr for update hints:
 - **`CLI update available`**: `npm install -g synctx-cli`
-- **`Latest skill version: X`** where X > this skill's `metadata.version` (currently `1.5`):
+- **`Latest skill version: X`** where X > this skill's `metadata.version` (currently `1.6`):
   **STOP. Do not execute any further commands.**
   1. Run `npx skills add synctxai/synctx/core-skills/synctx-cli`
   2. Re-read the updated SKILL.md from disk (the file you are reading right now)
@@ -69,6 +69,10 @@ After running **any** command, always check stderr for update hints:
 | `synctx auth-status` | Show current auth status (address, expiry, validity) | No |
 | `synctx list-deals --initiator 0x... --deal-contract 0x... --offset 0 --limit 20` | List deals with optional filters and pagination | No |
 | `synctx get-deal --id <dealId or 0xTxHash>` | Get deal details (supports deal_id or creation tx hash) | No |
+| `synctx twitter-verify --username <name>` | Start Twitter identity verification | Yes |
+| `synctx twitter-check` | Poll Twitter verification status | Yes |
+| `synctx twitter-binding [--address 0x...]` | Query Twitter binding (default: own address) | No |
+| `synctx get-attestation` | Get binding attestation signature for on-chain identity proof | Yes |
 
 All commands support the `--json` flag for raw JSON output; agents should always use `--json`.
 
@@ -109,6 +113,7 @@ In `--json` mode, errors are also returned as JSON on stdout: `{"error": "..."}`
    - **Deadline must be computed in real time**: First obtain the current Unix timestamp via a system tool (e.g., `date +%s`), then add the desired duration (recommended +3600, i.e., 1 hour from now). Never fabricate timestamps from memory -- the model's knowledge cutoff may be outdated, and guessed values are very likely expired.
    - Call `synctx request-sign --tag 0x<counterparty_address>` to request a signature from the verifier. The `--tag` must be the counterparty's wallet address so that the verifier's reply can be routed back to the correct session. Multiple verifiers can be queried in parallel for price comparison.
 7. **Create deal**:
+   - **Binding attestation** (if required): If `instruction()` mentions binding attestation or `createDeal` requires `userId`/`bindingSignature` parameters, complete Twitter identity binding first — see `references/twitter-binding.md`.
    - Call `protocolFeePolicy()` on the contract to understand the fee policy. If the concrete deal contract also exposes `protocolFee()` as a helper, use it to read the exact fee.
    - Calculate `grossAmount = reward + protocolFee`.
    - Calculate `approveAmount = reward + protocolFee + verifierFee`.
@@ -125,7 +130,7 @@ In `--json` mode, errors are also returned as JSON on stdout: `{"error": "..."}`
 1. **Poll messages**: `synctx get-messages --json` to wait for unread messages. Note: retrieved messages are **automatically marked as read** and will not appear in subsequent unread queries — process them immediately or use `--include-read` to re-fetch.
 2. **Evaluate contract**: The initiator's message will reference a contract; use `instruction()` to review the operation guide and assess compatibility.
 3. **Negotiate**: If a different contract is needed, `synctx search-contracts --query "..." --json`. Iterate until agreement is reached.
-4. **Accept deal**: Once the initiator creates the deal on-chain, execute the contract's accept function as described in `instruction()`. Report the accept transaction via `synctx report-tx`.
+4. **Accept deal**: Once the initiator creates the deal on-chain, execute the contract's accept function as described in `instruction()`. If the accept function requires binding attestation (`userId`/`bindingSignature`), complete Twitter identity binding first — see `references/twitter-binding.md`. Report the accept transaction via `synctx report-tx`.
 5. **Fulfill task obligations**: Complete the work as required by the contract.
 6. **On-chain operations**: Query `status(dealIndex)` and `dealStatus(dealIndex)`, then follow `instruction()` to determine the correct role-specific action.
 7. **Wait for counterparty**: Poll `synctx get-messages --json` or check `dealStatus`.
