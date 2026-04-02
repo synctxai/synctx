@@ -18,22 +18,47 @@ except ImportError:
     from abi import _invoke as _encode_calldata
 
 
-# ── Config ──
+# ── Config (auto-discovered, zero user configuration) ──
+
+_relayer_url_cache: str | None = None
 
 def _relayer_url() -> str:
-    url = os.environ.get("RELAYER_URL", "http://localhost:4100")
-    return url.rstrip("/")
+    """Get relayer URL from platform /api/config (cached)."""
+    global _relayer_url_cache
+    if _relayer_url_cache is not None:
+        return _relayer_url_cache
+
+    server = os.environ.get("SYNCTX_SERVER", "http://localhost:3000")
+    try:
+        resp = httpx.get(f"{server.rstrip('/')}/api/config", timeout=5)
+        resp.raise_for_status()
+        url = resp.json().get("relayerUrl")
+        if url:
+            _relayer_url_cache = url.rstrip("/")
+            return _relayer_url_cache
+    except Exception:
+        pass
+    raise RuntimeError("Cannot discover relayer URL from platform /api/config")
 
 
-def _forwarder_address(chain_id: int) -> str:
-    """Read forwarder address from env FORWARDER_{chainId} or auto-detect from contract."""
-    addr = os.environ.get(f"FORWARDER_{chain_id}")
-    if addr:
-        return Web3.to_checksum_address(addr)
-    raise RuntimeError(
-        f"FORWARDER_{chain_id} not set. "
-        f"Set it in .env to the SyncTxForwarder address on chain {chain_id}."
-    )
+_forwarder_cache: dict[str, str] = {}
+
+def _forwarder_address(chain_id: int, contract: str) -> str:
+    """Read trustedForwarder from the target contract (cached per contract address)."""
+    key = f"{chain_id}:{contract.lower()}"
+    if key in _forwarder_cache:
+        return _forwarder_cache[key]
+    w3 = get_w3(chain_id)
+    contract_addr = Web3.to_checksum_address(contract)
+    tf = w3.eth.contract(address=contract_addr, abi=[
+        {"inputs": [], "name": "trustedForwarder", "outputs": [{"type": "address"}], "stateMutability": "view", "type": "function"},
+    ])
+    addr = tf.functions.trustedForwarder().call()
+    if addr == "0x0000000000000000000000000000000000000000":
+        raise RuntimeError(f"trustedForwarder not set on contract {contract}")
+    addr = Web3.to_checksum_address(addr)
+    _forwarder_cache[key] = addr
+    return addr
 
 
 # ── Forwarder EIP-712 domain ──
@@ -55,12 +80,12 @@ FORWARD_REQUEST_TYPES = {
 }
 
 
-def _build_domain(chain_id: int) -> dict:
+def _build_domain(chain_id: int, contract: str) -> dict:
     return {
         "name": "SyncTxForwarder",
         "version": "1",
         "chainId": chain_id,
-        "verifyingContract": _forwarder_address(chain_id),
+        "verifyingContract": _forwarder_address(chain_id, contract),
     }
 
 
@@ -95,7 +120,7 @@ def _sign_forward_request(chain_id: int, to: str, calldata: str, deadline: int |
     typed_data = {
         "types": FORWARD_REQUEST_TYPES,
         "primaryType": "ForwardRequest",
-        "domain": _build_domain(chain_id),
+        "domain": _build_domain(chain_id, to),
         "message": message,
     }
 
@@ -243,9 +268,9 @@ def relay_with_permit(token: str, contract: str, amount: int,
 def relay_check(contract: str, *, chain_id: int = 10) -> dict:
     """Check if gasless relay is available for a contract."""
     try:
-        forwarder = _forwarder_address(chain_id)
-    except RuntimeError:
-        return {"available": False, "reason": f"FORWARDER_{chain_id} not configured"}
+        forwarder = _forwarder_address(chain_id, contract)
+    except Exception as e:
+        return {"available": False, "reason": str(e)}
 
     try:
         resp = httpx.get(f"{_relayer_url()}/relay/health", timeout=5)
@@ -254,26 +279,11 @@ def relay_check(contract: str, *, chain_id: int = 10) -> dict:
     except Exception:
         return {"available": False, "reason": "relayer unreachable"}
 
-    # Check if contract has trustedForwarder set
-    w3 = get_w3(chain_id)
-    try:
-        contract_addr = Web3.to_checksum_address(contract)
-        tf = w3.eth.contract(address=contract_addr, abi=[
-            {"inputs": [], "name": "trustedForwarder", "outputs": [{"type": "address"}], "stateMutability": "view", "type": "function"},
-        ])
-        on_chain_forwarder = tf.functions.trustedForwarder().call()
-        if on_chain_forwarder == "0x0000000000000000000000000000000000000000":
-            return {"available": False, "reason": "trustedForwarder not set on contract"}
-        if on_chain_forwarder.lower() != forwarder.lower():
-            return {"available": False, "reason": f"forwarder mismatch: contract={on_chain_forwarder}, env={forwarder}"}
-    except Exception as e:
-        return {"available": False, "reason": f"cannot read trustedForwarder: {e}"}
-
     # Check if the Vault has budget for this contract (sponsor has funded it)
     try:
         resp = httpx.get(
             f"{_relayer_url()}/relay/vault-budget",
-            params={"contract": contract_addr},
+            params={"contract": Web3.to_checksum_address(contract)},
             timeout=5,
         )
         if resp.status_code == 200:
