@@ -533,6 +533,11 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         return claims[dealIndex].claimer != address(0);
     }
 
+    /// @notice 合约级营业状态：OPEN → OPENING，CLOSED → CLOSED
+    function serviceMode() external view override returns (uint8) {
+        return campaignStatus == OPEN ? MODE_OPENING : MODE_CLOSED;
+    }
+
     function instruction() external view override returns (string memory) {
         return
             "# X Follow Campaign\n\n"

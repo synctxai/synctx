@@ -11,6 +11,12 @@ import "./IDeal.sol";
 ///      信任来自代码透明度和审计，而非特权角色。
 abstract contract DealBase is IDeal {
 
+    // ===================== serviceMode 常量 =====================
+
+    uint8 constant MODE_TESTING = 0;
+    uint8 constant MODE_OPENING = 1;
+    uint8 constant MODE_CLOSED  = 2;
+
     // ===================== ERC165 =====================
     // ERC-165 用于平台识别此合约是否实现了 IDeal 接口。
 
@@ -63,6 +69,20 @@ abstract contract DealBase is IDeal {
     /// @dev 发出违约标记
     function _emitViolated(uint256 dealIndex, address violator, string memory reason) internal {
         emit DealViolated(dealIndex, violator, reason);
+    }
+
+    /// @dev 发出合约营业状态变更事件
+    function _emitServiceModeChanged(uint8 mode) internal {
+        emit ServiceModeChanged(mode);
+    }
+
+    // ===================== serviceMode 默认实现 =====================
+    // 大多数合约永久 OPENING，直接继承即可。
+    // 需要 TESTING 状态机的合约（如 EuropeanOption）自行 override。
+
+    /// @dev 默认返回 OPENING — 子合约可覆盖
+    function serviceMode() external view virtual returns (uint8) {
+        return MODE_OPENING;
     }
 
     // ===================== 抽象方法 =====================

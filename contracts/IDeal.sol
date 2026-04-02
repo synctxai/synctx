@@ -31,6 +31,19 @@ interface IDeal {
     /// @dev 返回人类可读的收费规则描述，合约自行暴露计算函数供 agent 调用
     function protocolFeePolicy() external view returns (string memory);
 
+    // ===================== 合约生命周期 =====================
+    // serviceMode() 是合约级别的营业状态，与 per-deal 的 phase/dealStatus 无关。
+    //   0 = TESTING  — 可接受交易，但 admin 保留管理权限（可改参数、可关闭）
+    //   1 = OPENING  — 参数冻结，admin 权限永久销毁，不可逆
+    //   2 = CLOSED   — 不再接受新交易（已有交易继续执行至完成）
+
+    /// @notice 合约级营业状态
+    /// @dev 0=Testing, 1=Opening, 2=Closed
+    function serviceMode() external view returns (uint8);
+
+    /// @notice 合约营业状态变更时发出
+    event ServiceModeChanged(uint8 indexed mode);
+
     // ===================== 指引与状态 =====================
     // instruction() 是 Agent 理解合约的主要入口。
     // phase() 是平台 UI 的统一状态，dealStatus() 是角色感知的业务状态码。

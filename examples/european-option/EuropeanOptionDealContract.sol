@@ -52,6 +52,9 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
     error SettlementNotTimedOut();
     error Reentrancy();
     error VersionMismatch();
+    error NotAdmin();
+    error ContractNotOpen();
+    error ContractAlreadyOpen();
 
     uint8 public constant OPTION_PUT = 0;
     uint8 public constant OPTION_CALL = 1;
@@ -78,6 +81,11 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
     uint256 public constant MIN_EXPIRY_LEAD = 1 hours;
 
     address public immutable REQUIRED_SPEC;
+
+    // ===================== 合约生命周期 =====================
+
+    uint8   private _serviceMode;      // MODE_TESTING → MODE_OPENING or MODE_CLOSED
+    address private _admin;            // deployer，goLive() 后永久清零
 
     uint256 private _lock;
 
@@ -143,9 +151,39 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         _setInitializer();
         if (requiredSpec == address(0) || requiredSpec.code.length == 0) revert InvalidSpecAddress();
         REQUIRED_SPEC = requiredSpec;
+        _admin = msg.sender;
+        // _serviceMode 默认 0 = MODE_TESTING
+    }
+
+    // ===================== 合约生命周期管理 =====================
+
+    modifier onlyAdmin() {
+        if (msg.sender != _admin) revert NotAdmin();
+        _;
+    }
+
+    /// @notice TESTING → OPENING：冻结参数，永久销毁 admin 权限，不可逆
+    function goLive() external onlyAdmin {
+        if (_serviceMode != MODE_TESTING) revert ContractAlreadyOpen();
+        _serviceMode = MODE_OPENING;
+        _admin = address(0);
+        _emitServiceModeChanged(MODE_OPENING);
+    }
+
+    /// @notice TESTING → CLOSED：测试不通过，废弃合约，不可逆
+    function closeDuringTesting() external onlyAdmin {
+        if (_serviceMode != MODE_TESTING) revert ContractAlreadyOpen();
+        _serviceMode = MODE_CLOSED;
+        _admin = address(0);
+        _emitServiceModeChanged(MODE_CLOSED);
+    }
+
+    function serviceMode() external view override returns (uint8) {
+        return _serviceMode;
     }
 
     function createDeal(CreateDealParams calldata p) external nonReentrant returns (uint256 dealIndex) {
+        if (_serviceMode == MODE_CLOSED) revert ContractNotOpen();
         address sender = _msgSender();
         if (feeToken == address(0)) revert FeeTokenNotSet();
         if (p.writer == address(0) || p.writer == sender || p.verifier == address(0) || p.underlying == address(0)) {
