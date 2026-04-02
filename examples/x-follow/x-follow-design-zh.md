@@ -11,7 +11,7 @@
 | 角色 | 做什么 | 收益 |
 |------|--------|------|
 | **开发者** | 部署工厂 + implementation，设定 protocolFee，预充 relayer vault | 每次 claim 收手续费 |
-| **A（Campaign 创建者）** | 在工厂调 createCampaign()，存入预算 | 无需部署合约或支付 gas |
+| **A（Campaign 创建者）** | 在工厂调 createDeal()，存入预算 | 无需部署合约或支付 gas |
 | **B（关注者）** | 在 X 上关注目标账号，在子合约调 claim() | 赚取固定 USDC 奖励，零 gas 成本 |
 
 ### 1.2 架构
@@ -24,13 +24,13 @@ XFollowFactory（开发者部署一次）
   │  ├── requiredSpec, platformSigner（共享配置）
   │  └── relayer vault 为 A + B 的 gasless 交易提供 gas（开发者预充）
   │
-  ├── createCampaign() → Clones.clone(impl) + initialize()
+  ├── createDeal() → Clones.clone(impl) + initialize()
   │     └── XFollowCampaign（子合约 1，A₁ 的 campaign）
   │           ├── claim() → B₁ 获得 dealIndex 0
   │           ├── claim() → B₂ 获得 dealIndex 1
   │           └── withdrawRemaining()
   │
-  ├── createCampaign() → clone + initialize
+  ├── createDeal() → clone + initialize
   │     └── XFollowCampaign（子合约 2，A₂ 的 campaign）
   └── ...
 ```
@@ -39,8 +39,8 @@ XFollowFactory（开发者部署一次）
 
 - **继承链：** `XFollowFactory` 与 `XFollowCampaign` 都是完整的 `IDeal → DealBase` 合约；factory 负责入口与索引，child 负责实际 campaign 执行
 - **Clone 模式：** EIP-1167 最小代理。所有子合约共享 implementation 字节码，各自有独立 storage
-- **Gasless：** 工厂设置 `trustedForwarder` → 子合约继承 → A 的 createCampaign 和 B 的 claim() 均通过 relayer 免 gas。Gas 由开发者的 relayer vault 支付
-- **生命周期：** `createCampaign()` → 子合约直接进入 OPEN（无 TESTING 阶段）
+- **Gasless：** 工厂设置 `trustedForwarder` → 子合约继承 → A 的 createDeal 和 B 的 claim() 均通过 relayer 免 gas。Gas 由开发者的 relayer vault 支付
+- **生命周期：** `createDeal()` → 子合约直接进入 OPEN（无 TESTING 阶段）
 - **自动注册：** 工厂 emit `SubContractCreated(address subContract)` → 平台监听工厂事件 → 自动发现并注册子合约
 - **身份：** Binding Attestation（platformSigner 验签）为 B 的强制要求
 - **协议费：** 按 claim 收取，从 campaign 预算扣除 → 开发者的 feeCollector
@@ -74,7 +74,7 @@ contract XFollowFactory is DealBase {
     // ===================== 函数 =====================
 
     /// @notice A 创建 campaign。一笔 tx 完成 Clone + initialize。
-    function createCampaign(
+    function createDeal(
         uint96  grossAmount,
         address verifier,
         uint96  verifierFee,
@@ -138,7 +138,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
 | `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | 开发者 | 部署工厂，设置共享配置 |
-| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
+| `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
 
 ### 3.2 XFollowCampaign 函数
 
@@ -187,7 +187,7 @@ TYPEHASH：
 Verify(uint64 targetUserId,uint256 fee,uint256 deadline)
 ```
 
-A 在调用 `createCampaign()` 前向 verifier 请求签名。工厂将签名传递给子合约的 `initialize()`，在其中验证。
+A 在调用 `createDeal()` 前向 verifier 请求签名。工厂将签名传递给子合约的 `initialize()`，在其中验证。
 
 约束：`sigDeadline >= campaignDeadline`。
 
@@ -242,7 +242,7 @@ sequenceDiagram
     P-->>A: 异步消息
 
     Note over A: 🟢 USDC.approve(factory, grossAmount)
-    A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_user_id, deadline)
+    A->>Fac: 🟢 createDeal(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_user_id, deadline)
     Note over Fac: 1. Clone implementation → 子合约地址<br/>2. USDC.transferFrom(A → 子合约, grossAmount)<br/>3. child.initialize(params)<br/>4. initialize 中验证签名<br/>🔵 SubContractCreated(child)
     Note over P: 平台监听工厂事件<br/>→ 自动注册子合约
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
@@ -287,7 +287,7 @@ sequenceDiagram
 | 0 | OPEN | 接受 claim（未过 deadline，预算 ≥ claimCost） |
 | 1 | CLOSED | 不接受新 claim。待处理的验证继续解决 |
 
-> 无 TESTING 状态 — `createCampaign()` 直接初始化为 OPEN。
+> 无 TESTING 状态 — `createDeal()` 直接初始化为 OPEN。
 > CLOSED 在 deadline 到达或预算耗尽时自动触发（作为副作用）。
 
 ### 6.2 Per-Claim `dealStatus(dealIndex)`
@@ -344,7 +344,7 @@ flowchart TD
 
 | 操作 | 事件 |
 |------|------|
-| `createCampaign()` | `SubContractCreated(child)`（工厂，协议级） |
+| `createDeal()` | `SubContractCreated(child)`（工厂，协议级） |
 | `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
 | `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
 | `onVerificationResult(<0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
@@ -383,7 +383,7 @@ budget < claimCost       → 自动关闭 → CLOSED
 
 | 操作 | Tx 发送者 | Gas 由谁支付 |
 |------|----------|-------------|
-| A: createCampaign | Relayer（meta-tx） | 开发者的 vault |
+| A: createDeal | Relayer（meta-tx） | 开发者的 vault |
 | B: claim | Relayer（meta-tx） | 开发者的 vault |
 | B: notify_verifier | 平台 MCP 调用 | 无 gas（链下） |
 | Verifier: reportResult | Verifier signer EOA | Verifier（自有 gas） |
@@ -439,7 +439,7 @@ deadline 到期 + pendingClaims == 0 后：
 
 ## 9. 验证清单
 
-### 9.1 Factory.createCampaign
+### 9.1 Factory.createDeal
 
 | # | 检查项 | 错误 |
 |---|--------|------|

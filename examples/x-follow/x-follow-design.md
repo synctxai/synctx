@@ -11,7 +11,7 @@
 | Role | What they do | Incentive |
 |------|-------------|-----------|
 | **Developer** | Deploy factory + implementation, set protocolFee, fund relayer vault | Earn protocolFee per claim |
-| **A (Campaign Creator)** | Call factory.createCampaign() with budget, get followers | No need to deploy contracts or pay gas |
+| **A (Campaign Creator)** | Call factory.createDeal() with budget, get followers | No need to deploy contracts or pay gas |
 | **B (Follower)** | Follow target on X, call claim() on child contract | Earn fixed USDC reward, zero gas cost |
 
 ### 1.2 Architecture
@@ -24,13 +24,13 @@ XFollowFactory (developer deploys once)
   │  ├── requiredSpec, platformSigner (shared config)
   │  └── relayer vault funds gas for A + B (developer pre-funded)
   │
-  ├── createCampaign() → Clones.clone(impl) + initialize()
+  ├── createDeal() → Clones.clone(impl) + initialize()
   │     └── XFollowCampaign (child 1, A₁'s campaign)
   │           ├── claim() → B₁ gets dealIndex 0
   │           ├── claim() → B₂ gets dealIndex 1
   │           └── withdrawRemaining()
   │
-  ├── createCampaign() → clone + initialize
+  ├── createDeal() → clone + initialize
   │     └── XFollowCampaign (child 2, A₂'s campaign)
   └── ...
 ```
@@ -39,8 +39,8 @@ XFollowFactory (developer deploys once)
 
 - **Inheritance:** both `XFollowFactory` and `XFollowCampaign` are full `IDeal → DealBase` contracts; factory is the parent entry/index, child is the executable campaign
 - **Clone pattern:** EIP-1167 minimal proxy. All children share implementation bytecode, each has own storage
-- **Gasless:** Factory sets `trustedForwarder` → children inherit → A's createCampaign and B's claim() both gasless via relayer. Gas paid from developer's relayer vault
-- **Lifecycle:** `createCampaign()` → child enters OPEN immediately (no TESTING phase)
+- **Gasless:** Factory sets `trustedForwarder` → children inherit → A's createDeal and B's claim() both gasless via relayer. Gas paid from developer's relayer vault
+- **Lifecycle:** `createDeal()` → child enters OPEN immediately (no TESTING phase)
 - **Auto-registration:** Factory emits `SubContractCreated(address subContract)` → platform monitors factory events → auto-discovers and registers child contracts
 - **Identity:** Binding Attestation (platformSigner verification) mandatory for B
 - **Protocol fee:** Per-claim, from campaign budget → developer's feeCollector
@@ -74,7 +74,7 @@ contract XFollowFactory is DealBase {
     // ===================== Functions =====================
 
     /// @notice A creates a campaign. Clone + initialize in one tx.
-    function createCampaign(
+    function createDeal(
         uint96  grossAmount,
         address verifier,
         uint96  verifierFee,
@@ -138,7 +138,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | Method | Caller | Description |
 |--------|--------|-------------|
 | `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | Developer | Deploy factory with all shared config |
-| `createCampaign(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
+| `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
 
 ### 3.2 XFollowCampaign Functions
 
@@ -187,7 +187,7 @@ TYPEHASH:
 Verify(uint64 targetUserId,uint256 fee,uint256 deadline)
 ```
 
-A requests signature from verifier before calling `createCampaign()`. Factory passes the signature to the child's `initialize()`, which validates it.
+A requests signature from verifier before calling `createDeal()`. Factory passes the signature to the child's `initialize()`, which validates it.
 
 Constraint: `sigDeadline >= campaignDeadline`.
 
@@ -242,7 +242,7 @@ sequenceDiagram
     P-->>A: async message
 
     Note over A: 🟢 USDC.approve(factory, grossAmount)
-    A->>Fac: 🟢 createCampaign(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_user_id, deadline)
+    A->>Fac: 🟢 createDeal(grossAmount, verifier, verifierFee,<br/>rewardPerFollow, sigDeadline, sig, target_user_id, deadline)
     Note over Fac: 1. Clone implementation → child address<br/>2. USDC.transferFrom(A → child, grossAmount)<br/>3. child.initialize(params)<br/>4. Verify signature in initialize<br/>🔵 SubContractCreated(child)
     Note over P: Platform monitors factory events<br/>→ auto-register child contract
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
@@ -287,7 +287,7 @@ sequenceDiagram
 | 0 | OPEN | Accepting claims (not past deadline, budget ≥ claimCost) |
 | 1 | CLOSED | No new claims. Pending verifications continue |
 
-> No TESTING state — `createCampaign()` initializes directly to OPEN.
+> No TESTING state — `createDeal()` initializes directly to OPEN.
 > CLOSED auto-triggered on deadline or budget exhaustion (as side-effect).
 
 ### 6.2 Per-Claim `dealStatus(dealIndex)`
@@ -344,7 +344,7 @@ flowchart TD
 
 | Action | Events |
 |--------|--------|
-| `createCampaign()` | `SubContractCreated(child)` (factory, protocol-level) |
+| `createDeal()` | `SubContractCreated(child)` (factory, protocol-level) |
 | `claim()` | `DealCreated` → `DealStateChanged(0)` → `DealPhaseChanged(2)` → `VerificationRequested` |
 | `onVerificationResult(>0)` | `VerificationReceived` → `DealStateChanged(2)` → `DealPhaseChanged(3)` |
 | `onVerificationResult(<0)` | `VerificationReceived` → `DealStateChanged(3)` → `DealPhaseChanged(4)` |
@@ -383,7 +383,7 @@ All child contracts call _initForwarder() during initialize() to set trustedForw
 
 | Action | Tx Sender | Gas Paid By |
 |--------|-----------|-------------|
-| A: createCampaign | Relayer (meta-tx) | Developer's vault |
+| A: createDeal | Relayer (meta-tx) | Developer's vault |
 | B: claim | Relayer (meta-tx) | Developer's vault |
 | B: notify_verifier | Platform MCP call | No gas (off-chain) |
 | Verifier: reportResult | Verifier signer EOA | Verifier (has own gas) |
@@ -439,7 +439,7 @@ After deadline + pendingClaims == 0:
 
 ## 9. Validation Checklist
 
-### 9.1 Factory.createCampaign
+### 9.1 Factory.createDeal
 
 | # | Check | Error |
 |---|-------|-------|

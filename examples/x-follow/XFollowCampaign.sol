@@ -17,6 +17,11 @@ import "./BindingAttestation.sol";
 ///      无 constructor — 所有状态通过 initialize() 一次性设置（clone 兼容）。
 contract XFollowCampaign is DealBase, ERC2771Mixin {
 
+    /// @dev Lock implementation against initialize() — clones are unaffected.
+    constructor() {
+        _initialized = true;
+    }
+
     // ===================== 错误 =====================
 
     error NotPartyA();
@@ -121,7 +126,8 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     // ===================== Per-Claim 存储 =====================
 
     mapping(uint256 => Claim) internal claims;
-    mapping(address => bool)  public claimed;
+    mapping(address => bool)  public claimedAddress;
+    mapping(uint64  => uint8) public claimedUserId;          // 0=未领取 1=验证中 2=已领取
     mapping(address => uint8) public failCount;
     mapping(address => uint256) internal pendingClaimIndex;  // B → 当前 pending 的 dealIndex
 
@@ -207,6 +213,8 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     // ===================== Claim（每个 claim = 一个 dealIndex） =====================
 
     /// @notice B 领取关注奖励。提交 Binding Attestation 证明身份。
+    ///         claimedUserId 状态：0=可领取，1=验证中（锁定），2=已成功领取（永久锁定）。
+    ///         验证失败/inconclusive 自动回退为 0；超时需先调 resetVerification() 回退后方可重试。
     /// @param userId B 的 Twitter immutable user_id
     /// @param bindingSig Platform 签发的绑定证明签名
     function claim(uint64 userId, bytes calldata bindingSig) external nonReentrant returns (uint256 dealIndex) {
@@ -215,7 +223,8 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         if (campaignStatus != OPEN) revert CampaignNotOpen();
 
         address sender = _msgSender();
-        if (claimed[sender]) revert AlreadyClaimed();
+        if (claimedAddress[sender]) revert AlreadyClaimed();
+        if (claimedUserId[userId] != 0) revert AlreadyClaimed();
         if (failCount[sender] >= MAX_FAILURES) revert MaxFailures();
 
         // 检查是否有 pending claim
@@ -253,6 +262,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
             follower_user_id: followerUserId
         });
         pendingClaimIndex[sender] = dealIndex;
+        claimedUserId[followerUserId] = 1;
         pendingClaims++;
 
         _emitStateChanged(dealIndex, VERIFYING);
@@ -285,7 +295,8 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         if (result > 0) {
             // 通过：付款给 B
             c.status = COMPLETED;
-            claimed[claimer] = true;
+            claimedAddress[claimer] = true;
+            claimedUserId[c.follower_user_id] = 2;
             completedClaims++;
 
             _emitStateChanged(dealIndex, COMPLETED);
@@ -298,11 +309,13 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
             if (!IERC20(feeToken).transfer(feeCollector, pFee)) revert TransferFailed();
 
         } else if (result < 0) {
-            // 失败：reward + protocolFee 退回预算，仅 verifierFee 付出
+            // 失败：reward + protocolFee 退回预算，仅 verifierFee 付出，B 违约
             c.status = REJECTED;
             failCount[claimer]++;
+            claimedUserId[c.follower_user_id] = 0;
             budget += reward + pFee;
 
+            _emitViolated(dealIndex, claimer, "follow not detected");
             _emitStateChanged(dealIndex, REJECTED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
 
@@ -313,6 +326,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         } else {
             // 不确定：全额退回预算，不扣费
             c.status = INCONCLUSIVE;
+            claimedUserId[c.follower_user_id] = 0;
             budget += reward + vFee + pFee;
 
             _emitStateChanged(dealIndex, INCONCLUSIVE);
@@ -325,7 +339,10 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
     // ===================== 验证超时重置 =====================
 
-    /// @notice Verifier 超时后重置 claim，全额退回预算
+    /// @notice Verifier 超时后重置 claim，全额退回预算。
+    ///         任何人均可调用（permissionless cleanup）。
+    ///         重置后解锁 claimedUserId 和 pendingClaimIndex，B 可重新 claim()。
+    ///         验证失败(result<0) 和 inconclusive(result==0) 由 onVerificationResult 自动清理，无需手动 reset。
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
         external onlySlot0(verificationIndex) nonReentrant
     {
@@ -336,10 +353,12 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         c.status = TIMED_OUT;
         pendingClaims--;
         delete pendingClaimIndex[c.claimer];
+        claimedUserId[c.follower_user_id] = 0;
         budget += _claimCost();
         verifierTimeoutCount++;
 
         emit VerifierTimeout(dealIndex, verifier);
+        _emitViolated(dealIndex, verifier, "verifier timeout");
         _emitStateChanged(dealIndex, TIMED_OUT);
         _emitPhaseChanged(dealIndex, 4); // → Failed
 
@@ -347,6 +366,12 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     }
 
     // ===================== Campaign 结束 =====================
+
+    /// @notice A 主动关闭 campaign，阻止新 claim，不影响已有 pending claims
+    function closeCampaign() external onlyA {
+        if (campaignStatus != OPEN) revert CampaignNotOpen();
+        campaignStatus = CLOSED;
+    }
 
     /// @notice CLOSED 且无 pending 时，A 提取剩余预算
     function withdrawRemaining() external onlyA nonReentrant {
@@ -412,14 +437,16 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         return uint256(budget) / uint256(cost);
     }
 
-    /// @notice 指定地址是否可 claim（不含绑定检查，绑定在 claim() 时验证）
-    function canClaim(address addr) external view returns (bool) {
+    /// @notice 指定地址 + userId 是否可 claim（含绑定检查）
+    function canClaim(address addr, uint64 userId, bytes calldata bindingSig) external view returns (bool) {
         if (campaignStatus != OPEN) return false;
         if (block.timestamp > deadline) return false;
         if (budget < _claimCost()) return false;
-        if (claimed[addr]) return false;
+        if (claimedAddress[addr]) return false;
+        if (claimedUserId[userId]) return false;
         if (failCount[addr] >= MAX_FAILURES) return false;
         if (_hasPendingClaim(addr)) return false;
+        if (!bindingAttestation.verify(addr, userId, bindingSig)) return false;
         return true;
     }
 
@@ -521,13 +548,18 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
             "4. Wait for verification result\n\n"
             "## Costs\n\n"
             "B pays nothing. All fees (reward + verifierFee + protocolFee) come from A's budget.\n"
-            "Query `claimCost()` for per-claim cost, `remainingSlots()` for available claims.\n\n"
+            "Query `claimCost()` for per-claim cost, `remainingSlots()` for available claims.\n"
+            "Query `canClaim(addr, userId, bindingSig)` for full pre-flight check (address + userId dedup + binding attestation).\n\n"
             "## Fee Policy\n\n"
             "- Successful claim: reward to B, verifierFee to Verifier, protocolFee to Developer.\n"
             "- Failed claim (not following): only verifierFee deducted, reward + protocolFee refunded to budget.\n"
             "- Inconclusive (API error): full refund to budget.\n\n"
             "## Failure Policy\n\n"
             "Failed claims (not following) increment failCount. After 3 failures, banned from this campaign.\n"
-            "Inconclusive results (API errors) do not count as failures.\n";
+            "Inconclusive results (API errors) do not count as failures.\n\n"
+            "## Withdrawing Remaining Budget (A)\n\n"
+            "1. Campaign must be CLOSED (auto on deadline/budget, or call `closeCampaign()`)\n"
+            "2. If pending claims exist, wait for verification timeout (30 min), then call `resetVerification(dealIndex, 0)` for each\n"
+            "3. Once `pendingClaims == 0`, call `withdrawRemaining()` to reclaim budget\n";
     }
 }

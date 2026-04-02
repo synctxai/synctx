@@ -26,6 +26,7 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
     error InvalidVerifierSignature();
     error SignatureExpired();
     error InsufficientBudget();
+    error FeeTokenNotSet();
 
     // ===================== 常量 =====================
 
@@ -48,6 +49,19 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
     /// @notice Binding Attestation 认证合约
     BindingAttestation public immutable BINDING_ATTESTATION;
 
+    // ===================== 重入保护 =====================
+
+    uint256 private _lock;
+
+    modifier nonReentrant() {
+        if (_lock == 1) revert Reentrancy();
+        _lock = 1;
+        _;
+        _lock = 0;
+    }
+
+    error Reentrancy();
+
     // ===================== Campaign 追踪 =====================
 
     /// @notice factory dealIndex → campaign 地址
@@ -67,7 +81,7 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
         if (implementation_ == address(0) || implementation_.code.length == 0) revert InvalidParams();
         if (feeCollector_ == address(0) || feeCollector_.code.length == 0) revert InvalidParams();
         if (protocolFee_ < MIN_PROTOCOL_FEE) revert InvalidParams();
-        if (requiredSpec_ == address(0)) revert InvalidParams();
+        if (requiredSpec_ == address(0) || requiredSpec_.code.length == 0) revert InvalidParams();
         if (bindingAttestation_ == address(0) || bindingAttestation_.code.length == 0) revert InvalidParams();
 
         IMPLEMENTATION = implementation_;
@@ -98,7 +112,8 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
         bytes calldata sig,
         uint64  target_user_id_,
         uint48  deadline_
-    ) external returns (address campaign) {
+    ) external nonReentrant returns (address campaign) {
+        if (feeToken == address(0)) revert FeeTokenNotSet();
         address sender = _msgSender();
 
         // 基础验证（详细验证由 campaign.initialize 完成）
