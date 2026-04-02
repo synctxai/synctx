@@ -36,9 +36,9 @@ def _relayer_url() -> str:
         if url:
             _relayer_url_cache = url.rstrip("/")
             return _relayer_url_cache
-    except Exception:
-        pass
-    raise RuntimeError("Cannot discover relayer URL from platform /api/config")
+    except Exception as e:
+        raise RuntimeError(f"Cannot discover relayer URL from platform /api/config: {e}") from e
+    raise RuntimeError("Cannot discover relayer URL: relayerUrl not found in /api/config response")
 
 
 _forwarder_cache: dict[str, str] = {}
@@ -54,7 +54,7 @@ def _forwarder_address(chain_id: int, contract: str) -> str:
         {"inputs": [], "name": "trustedForwarder", "outputs": [{"type": "address"}], "stateMutability": "view", "type": "function"},
     ])
     addr = tf.functions.trustedForwarder().call()
-    if addr == "0x0000000000000000000000000000000000000000":
+    if int(addr, 16) == 0:
         raise RuntimeError(f"trustedForwarder not set on contract {contract}")
     addr = Web3.to_checksum_address(addr)
     _forwarder_cache[key] = addr
@@ -273,7 +273,12 @@ def relay_check(contract: str, *, chain_id: int = 10) -> dict:
         return {"available": False, "reason": str(e)}
 
     try:
-        resp = httpx.get(f"{_relayer_url()}/relay/health", timeout=5)
+        relayer = _relayer_url()
+    except Exception as e:
+        return {"available": False, "reason": f"relayer discovery failed: {e}"}
+
+    try:
+        resp = httpx.get(f"{relayer}/relay/health", timeout=5)
         if resp.status_code != 200:
             return {"available": False, "reason": "relayer unhealthy"}
     except Exception:
@@ -282,24 +287,25 @@ def relay_check(contract: str, *, chain_id: int = 10) -> dict:
     # Check if the Vault has budget for this contract (sponsor has funded it)
     try:
         resp = httpx.get(
-            f"{_relayer_url()}/relay/vault-budget",
+            f"{relayer}/relay/vault-budget",
             params={"contract": Web3.to_checksum_address(contract)},
             timeout=5,
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            budget = data.get("budget")
-            if budget is None:
-                return {"available": False, "reason": "gas sponsor vault not configured"}
-            if int(budget) <= 0:
-                return {"available": False, "reason": "no sponsor budget for this contract"}
+        if resp.status_code != 200:
+            return {"available": False, "reason": f"vault-budget endpoint returned {resp.status_code}"}
+        data = resp.json()
+        budget = data.get("budget")
+        if budget is None:
+            return {"available": False, "reason": "gas sponsor vault not configured"}
+        if int(budget) <= 0:
+            return {"available": False, "reason": "no sponsor budget for this contract"}
     except Exception:
         return {"available": False, "reason": "cannot query vault budget"}
 
     return {
         "available": True,
         "forwarder": forwarder,
-        "relayer": _relayer_url(),
+        "relayer": relayer,
         "contract": contract,
         "chain_id": chain_id,
         "budget": budget,
