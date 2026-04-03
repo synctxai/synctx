@@ -5,7 +5,7 @@ import "../../contracts/DealBase.sol";
 import "../../contracts/IVerifier.sol";
 import "../../contracts/IERC20.sol";
 import "../../contracts/Initializable.sol";
-import "../../contracts/ERC2771Mixin.sol";
+import "../../contracts/MetaTxMixin.sol";
 import "../european-option-verifier-spec/SettlementPriceVerifierSpec.sol";
 
 interface IERC20MetadataLike {
@@ -27,7 +27,7 @@ interface ISettlementPriceVerifierLike {
 ///      3. 到期后任一参与方可请求价格验证
 ///      4. Verifier 提交 settlement price，合约按 option type 自动结算
 ///      5. 若验证失败/不确定，则进入 Settling，由双方协商；超时则 unwind
-contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
+contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("EuropeanOptionDeal", "1") {
 
     error FeeTokenNotSet();
     error InvalidParams();
@@ -137,6 +137,38 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
     mapping(uint256 => Deal) internal deals;
     mapping(uint256 => SettlementProposal) internal settlements;
 
+    // ===================== BySig TYPEHASH 常量 =====================
+
+    bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
+        "CreateDealBySig(address writer,address underlying,uint8 optionType,"
+        "uint256 quantity,uint256 strike,uint256 premium,uint48 expiry,"
+        "uint32 settlementWindow,address verifier,uint96 verifierFee,"
+        "uint256 verifierDeadline,bytes32 verifierSigHash,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _ACCEPT_TYPEHASH = keccak256(
+        "AcceptBySig(uint256 dealIndex,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _REQUEST_VERIFICATION_TYPEHASH = keccak256(
+        "RequestVerificationBySig(uint256 dealIndex,uint256 verificationIndex,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _PROPOSE_SETTLEMENT_TYPEHASH = keccak256(
+        "ProposeSettlementBySig(uint256 dealIndex,uint256 amountToHolder,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _CONFIRM_SETTLEMENT_TYPEHASH = keccak256(
+        "ConfirmSettlementBySig(uint256 dealIndex,uint256 expectedVersion,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    // ===================== 修饰器 =====================
+
     modifier nonReentrant() {
         if (_lock == 2) revert Reentrancy();
         _lock = 2;
@@ -184,9 +216,33 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         return _serviceMode;
     }
 
+    // ===================== createDeal =====================
+
     function createDeal(CreateDealParams calldata p) external nonReentrant returns (uint256 dealIndex) {
+        return _createDealCore(msg.sender, p);
+    }
+
+    /// @notice 创建交易（gasless BySig 版本）
+    function createDealBySig(CreateDealParams calldata p, PermitData calldata permit, MetaTxProof calldata proof)
+        external
+        nonReentrant
+        returns (uint256 dealIndex)
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _CREATE_DEAL_TYPEHASH,
+            p.writer, p.underlying, p.optionType,
+            p.quantity, p.strike, p.premium, p.expiry,
+            p.settlementWindow, p.verifier, p.verifierFee,
+            p.verifierDeadline, keccak256(p.verifierSig),
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _executePermit(permit, proof.signer);
+        return _createDealCore(proof.signer, p);
+    }
+
+    function _createDealCore(address sender, CreateDealParams calldata p) internal returns (uint256 dealIndex) {
         if (_serviceMode == MODE_CLOSED) revert ContractNotOpen();
-        address sender = _msgSender();
         if (feeToken == address(0)) revert FeeTokenNotSet();
         if (p.writer == address(0) || p.writer == sender || p.verifier == address(0) || p.underlying == address(0)) {
             revert InvalidParams();
@@ -242,9 +298,29 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         _emitStatusChanged(dealIndex, WAITING_ACCEPT);
     }
 
+    // ===================== accept =====================
+
     function accept(uint256 dealIndex) external nonReentrant {
+        _acceptCore(msg.sender, dealIndex);
+    }
+
+    /// @notice Writer 接受交易（gasless BySig 版本）
+    function acceptBySig(uint256 dealIndex, PermitData calldata permit, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _ACCEPT_TYPEHASH,
+            dealIndex,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _executePermit(permit, proof.signer);
+        _acceptCore(proof.signer, dealIndex);
+    }
+
+    function _acceptCore(address sender, uint256 dealIndex) internal {
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
         if (sender != d.writer) revert NotWriter();
         if (d.status != WAITING_ACCEPT) revert InvalidStatus();
         if (_isAcceptTimedOut(d)) revert AlreadyTimedOut();
@@ -261,9 +337,11 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         _emitStatusChanged(dealIndex, ACTIVE);
     }
 
+    // ===================== cancelDeal =====================
+
     function cancelDeal(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
-        if (_msgSender() != d.holder) revert NotHolder();
+        if (msg.sender != d.holder) revert NotHolder();
         if (d.status != WAITING_ACCEPT) revert InvalidStatus();
         if (!_isAcceptTimedOut(d)) revert NotTimedOut();
 
@@ -279,14 +357,40 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         }
     }
 
+    // ===================== requestVerification =====================
+
     function requestVerification(uint256 dealIndex, uint256 verificationIndex)
         external
         override
-        onlySlot0(verificationIndex)
         nonReentrant
     {
+        _requestVerificationCore(msg.sender, dealIndex, verificationIndex);
+    }
+
+    /// @notice 请求验证（gasless BySig 版本）
+    function requestVerificationBySig(
+        uint256 dealIndex,
+        uint256 verificationIndex,
+        PermitData calldata permit,
+        MetaTxProof calldata proof
+    )
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _REQUEST_VERIFICATION_TYPEHASH,
+            dealIndex, verificationIndex,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _executePermit(permit, proof.signer);
+        _requestVerificationCore(proof.signer, dealIndex, verificationIndex);
+    }
+
+    function _requestVerificationCore(address sender, uint256 dealIndex, uint256 verificationIndex) internal {
+        if (verificationIndex != 0) revert InvalidVerificationIndex();
+
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
         if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != ACTIVE) revert InvalidStatus();
         if (block.timestamp < uint256(d.expiry)) revert InvalidStatus();
@@ -303,6 +407,8 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
             if (!IERC20(feeToken).transferFrom(sender, address(this), fee)) revert TransferFailed();
         }
     }
+
+    // ===================== onVerificationResult =====================
 
     function onVerificationResult(
         uint256 dealIndex,
@@ -346,13 +452,16 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         }
     }
 
+    // ===================== resetVerification =====================
+
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
         external
         onlySlot0(verificationIndex)
         nonReentrant
     {
         Deal storage d = deals[dealIndex];
-        if (_msgSender() != d.holder && _msgSender() != d.writer) revert NotParty();
+        address sender = msg.sender;
+        if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != VERIFYING) revert InvalidStatus();
         if (block.timestamp <= uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) {
             revert VerificationNotTimedOut();
@@ -372,9 +481,28 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         }
     }
 
+    // ===================== proposeSettlement =====================
+
     function proposeSettlement(uint256 dealIndex, uint256 amountToHolder) external {
+        _proposeSettlementCore(msg.sender, dealIndex, amountToHolder);
+    }
+
+    /// @notice 提出协商方案（gasless BySig 版本）
+    function proposeSettlementBySig(uint256 dealIndex, uint256 amountToHolder, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _PROPOSE_SETTLEMENT_TYPEHASH,
+            dealIndex, amountToHolder,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _proposeSettlementCore(proof.signer, dealIndex, amountToHolder);
+    }
+
+    function _proposeSettlementCore(address sender, uint256 dealIndex, uint256 amountToHolder) internal {
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
         if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (_isSettlingTimedOut(d)) revert AlreadyTimedOut();
@@ -388,10 +516,29 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         emit SettlementProposed(dealIndex, sender, amountToHolder);
     }
 
+    // ===================== confirmSettlement =====================
+
     function confirmSettlement(uint256 dealIndex, uint256 expectedVersion) external nonReentrant {
+        _confirmSettlementCore(msg.sender, dealIndex, expectedVersion);
+    }
+
+    /// @notice 确认对方的协商提案（gasless BySig 版本）
+    function confirmSettlementBySig(uint256 dealIndex, uint256 expectedVersion, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _CONFIRM_SETTLEMENT_TYPEHASH,
+            dealIndex, expectedVersion,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _confirmSettlementCore(proof.signer, dealIndex, expectedVersion);
+    }
+
+    function _confirmSettlementCore(address sender, uint256 dealIndex, uint256 expectedVersion) internal {
         Deal storage d = deals[dealIndex];
         SettlementProposal storage stl = settlements[dealIndex];
-        address sender = _msgSender();
         if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (_isSettlingTimedOut(d)) revert SettlementTimedOut();
@@ -409,9 +556,12 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         delete settlements[dealIndex];
     }
 
+    // ===================== triggerSettlementTimeout =====================
+
     function triggerSettlementTimeout(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
-        if (_msgSender() != d.holder && _msgSender() != d.writer) revert NotParty();
+        address sender = msg.sender;
+        if (sender != d.holder && sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (!_isSettlingTimedOut(d)) revert SettlementNotTimedOut();
 
@@ -434,6 +584,8 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
             if (!IERC20(collateralToken).transfer(d.writer, collateral)) revert TransferFailed();
         }
     }
+
+    // ===================== 内部结算逻辑 =====================
 
     function _settleWithPrice(
         uint256 dealIndex,

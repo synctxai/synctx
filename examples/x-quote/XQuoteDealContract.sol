@@ -6,7 +6,7 @@ import "./IVerifier.sol";
 import "./XQuoteVerifierSpec.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
-import "./ERC2771Mixin.sol";
+import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 
 
@@ -21,7 +21,7 @@ import "./BindingAttestation.sol";
 ///      3. B 在 X 上引用推文，然后调用 claimDone 提交 quote_tweet_id
 ///      4. A 手动确认付款，或请求 Verifier 自动验证
 ///      5. 如果验证不确定或 Verifier 超时，进入协商阶段
-contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
+contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal", "1") {
 
     // ===================== 错误 =====================
 
@@ -141,15 +141,54 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     mapping(uint256 => Settlement) internal settlementByA;
     mapping(uint256 => Settlement) internal settlementByB;
 
+    // ===================== BySig TYPEHASH 常量 =====================
+
+    bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
+        "CreateDealBySig(address partyB,uint96 grossAmount,address verifier,"
+        "uint96 verifierFee,uint256 verifierDeadline,bytes32 verifierSigHash,"
+        "string tweet_id,uint64 quoterUserId,bytes32 bindingSigHash,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _ACCEPT_TYPEHASH = keccak256(
+        "AcceptBySig(uint256 dealIndex,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _CLAIM_DONE_TYPEHASH = keccak256(
+        "ClaimDoneBySig(uint256 dealIndex,string quote_tweet_id,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _CONFIRM_AND_PAY_TYPEHASH = keccak256(
+        "ConfirmAndPayBySig(uint256 dealIndex,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _REQUEST_VERIFICATION_TYPEHASH = keccak256(
+        "RequestVerificationBySig(uint256 dealIndex,uint256 verificationIndex,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _PROPOSE_SETTLEMENT_TYPEHASH = keccak256(
+        "ProposeSettlementBySig(uint256 dealIndex,uint96 amountToA,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 private constant _CONFIRM_SETTLEMENT_TYPEHASH = keccak256(
+        "ConfirmSettlementBySig(uint256 dealIndex,uint256 expectedVersion,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
     // ===================== 修饰器 =====================
 
     modifier onlyA(uint256 dealIndex) {
-        if (_msgSender() != deals[dealIndex].partyA) revert NotPartyA();
+        if (msg.sender != deals[dealIndex].partyA) revert NotPartyA();
         _;
     }
 
     modifier onlyB(uint256 dealIndex) {
-        if (_msgSender() != deals[dealIndex].partyB) revert NotPartyB();
+        if (msg.sender != deals[dealIndex].partyB) revert NotPartyB();
         _;
     }
 
@@ -207,9 +246,49 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         uint64  quoterUserId,
         bytes calldata bindingSig
     ) external nonReentrant returns (uint256 dealIndex) {
+        return _createDealCore(msg.sender, partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoterUserId, bindingSig);
+    }
+
+    /// @notice 创建交易（gasless BySig 版本）
+    function createDealBySig(
+        address partyB,
+        uint96  grossAmount,
+        address verifier,
+        uint96  verifierFee,
+        uint256 verifierDeadline,
+        bytes calldata sig,
+        string calldata tweet_id,
+        uint64  quoterUserId,
+        bytes calldata bindingSig,
+        PermitData calldata permit,
+        MetaTxProof calldata proof
+    ) external nonReentrant returns (uint256 dealIndex) {
+        bytes32 structHash = keccak256(abi.encode(
+            _CREATE_DEAL_TYPEHASH,
+            partyB, grossAmount, verifier,
+            verifierFee, verifierDeadline, keccak256(sig),
+            keccak256(bytes(tweet_id)), quoterUserId, keccak256(bindingSig),
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _executePermit(permit, proof.signer);
+        return _createDealCore(proof.signer, partyB, grossAmount, verifier, verifierFee, verifierDeadline, sig, tweet_id, quoterUserId, bindingSig);
+    }
+
+    function _createDealCore(
+        address sender,
+        address partyB,
+        uint96  grossAmount,
+        address verifier,
+        uint96  verifierFee,
+        uint256 deadline,
+        bytes calldata sig,
+        string calldata tweet_id,
+        uint64  quoterUserId,
+        bytes calldata bindingSig
+    ) internal returns (uint256 dealIndex) {
         // --- 参数校验 ---
         if (feeToken == address(0)) revert FeeTokenNotSet();
-        address sender = _msgSender();
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
         if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
         if (partyB == address(0)) revert InvalidParams();
@@ -269,7 +348,29 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         atStatus(dealIndex, WAITING_ACCEPT)
         notTimedOut(dealIndex)
     {
+        _acceptCore(msg.sender, dealIndex);
+    }
+
+    /// @notice B 接受交易（gasless BySig 版本）
+    function acceptBySig(uint256 dealIndex, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _ACCEPT_TYPEHASH,
+            dealIndex,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _acceptCore(proof.signer, dealIndex);
+    }
+
+    function _acceptCore(address sender, uint256 dealIndex) internal {
         Deal storage d = deals[dealIndex];
+        if (sender != d.partyB) revert NotPartyB();
+        if (d.status != WAITING_ACCEPT) revert InvalidStatus();
+        if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
+
         uint96 fee = PROTOCOL_FEE;
         d.status = WAITING_CLAIM;
         d.stageTimestamp = uint48(block.timestamp);
@@ -287,9 +388,32 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         atStatus(dealIndex, WAITING_CLAIM)
         notTimedOut(dealIndex)
     {
+        _claimDoneCore(msg.sender, dealIndex, quote_tweet_id);
+    }
+
+    /// @notice B 声称已完成引用推文（gasless BySig 版本）
+    function claimDoneBySig(uint256 dealIndex, string calldata quote_tweet_id, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _CLAIM_DONE_TYPEHASH,
+            dealIndex,
+            keccak256(bytes(quote_tweet_id)),
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _claimDoneCore(proof.signer, dealIndex, quote_tweet_id);
+    }
+
+    function _claimDoneCore(address sender, uint256 dealIndex, string calldata quote_tweet_id) internal {
+        Deal storage d = deals[dealIndex];
+        if (sender != d.partyB) revert NotPartyB();
+        if (d.status != WAITING_CLAIM) revert InvalidStatus();
+        if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
+
         if (bytes(quote_tweet_id).length == 0) revert InvalidParams();
 
-        Deal storage d = deals[dealIndex];
         d.quote_tweet_id = quote_tweet_id;
         d.status = WAITING_CONFIRM;
         d.stageTimestamp = uint48(block.timestamp);
@@ -305,7 +429,29 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         atStatus(dealIndex, WAITING_CONFIRM)
         notTimedOut(dealIndex)
     {
+        _confirmAndPayCore(msg.sender, dealIndex);
+    }
+
+    /// @notice A 手动确认并直接付款给 B（gasless BySig 版本）
+    function confirmAndPayBySig(uint256 dealIndex, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _CONFIRM_AND_PAY_TYPEHASH,
+            dealIndex,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _confirmAndPayCore(proof.signer, dealIndex);
+    }
+
+    function _confirmAndPayCore(address sender, uint256 dealIndex) internal {
         Deal storage d = deals[dealIndex];
+        if (sender != d.partyA) revert NotPartyA();
+        if (d.status != WAITING_CONFIRM) revert InvalidStatus();
+        if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
+
         uint96 amt = d.amount;
         d.amount = 0;
         d.status = COMPLETED;
@@ -349,8 +495,29 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         atStatus(dealIndex, WAITING_CONFIRM)
         onlySlot0(verificationIndex)
     {
+        _requestVerificationCore(msg.sender, dealIndex, verificationIndex);
+    }
+
+    /// @notice Trader 触发验证（gasless BySig 版本）
+    function requestVerificationBySig(uint256 dealIndex, uint256 verificationIndex, PermitData calldata permit, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _REQUEST_VERIFICATION_TYPEHASH,
+            dealIndex, verificationIndex,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _executePermit(permit, proof.signer);
+        _requestVerificationCore(proof.signer, dealIndex, verificationIndex);
+    }
+
+    function _requestVerificationCore(address sender, uint256 dealIndex, uint256 verificationIndex) internal {
+        if (verificationIndex != 0) revert InvalidVerificationIndex();
+
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
+        if (d.status != WAITING_CONFIRM) revert InvalidStatus();
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
@@ -435,7 +602,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         onlySlot0(verificationIndex)
     {
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
+        address sender = msg.sender;
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (block.timestamp <= uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT)
             revert VerificationNotTimedOut();
@@ -465,8 +632,26 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         external
         atStatus(dealIndex, SETTLING)
     {
+        _proposeSettlementCore(msg.sender, dealIndex, amountToA);
+    }
+
+    /// @notice 提出协商方案（gasless BySig 版本）
+    function proposeSettlementBySig(uint256 dealIndex, uint96 amountToA, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _PROPOSE_SETTLEMENT_TYPEHASH,
+            dealIndex, amountToA,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _proposeSettlementCore(proof.signer, dealIndex, amountToA);
+    }
+
+    function _proposeSettlementCore(address sender, uint256 dealIndex, uint96 amountToA) internal {
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
+        if (d.status != SETTLING) revert InvalidStatus();
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
         if (amountToA > d.amount) revert InvalidSettlement();
@@ -494,8 +679,26 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         nonReentrant
         atStatus(dealIndex, SETTLING)
     {
+        _confirmSettlementCore(msg.sender, dealIndex, expectedVersion);
+    }
+
+    /// @notice 确认对方的协商提案（gasless BySig 版本）
+    function confirmSettlementBySig(uint256 dealIndex, uint256 expectedVersion, MetaTxProof calldata proof)
+        external
+        nonReentrant
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _CONFIRM_SETTLEMENT_TYPEHASH,
+            dealIndex, expectedVersion,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _confirmSettlementCore(proof.signer, dealIndex, expectedVersion);
+    }
+
+    function _confirmSettlementCore(address sender, uint256 dealIndex, uint256 expectedVersion) internal {
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
+        if (d.status != SETTLING) revert InvalidStatus();
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
 
         // 获取对方的提案
@@ -534,7 +737,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
         atStatus(dealIndex, SETTLING)
     {
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
+        address sender = msg.sender;
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
 
         uint256 settlingDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT;
@@ -574,7 +777,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
         if (s == WAITING_CLAIM) {
             // B 未 claimDone → B 违约
-            if (_msgSender() != d.partyA) revert NotPartyA();
+            if (msg.sender != d.partyA) revert NotPartyA();
             d.status = VIOLATED;
             d.violator = d.partyB;
             _emitViolated(dealIndex, d.partyB, "claim timeout");
@@ -583,7 +786,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
         } else if (s == WAITING_CONFIRM) {
             // A 未确认 → 自动付款给 B
-            if (_msgSender() != d.partyB) revert NotPartyB();
+            if (msg.sender != d.partyB) revert NotPartyB();
             uint96 amt = d.amount;
             d.amount = 0;
             d.status = COMPLETED;
@@ -599,7 +802,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     /// @notice 违约后提取资金
     function withdraw(uint256 dealIndex) external nonReentrant atStatus(dealIndex, VIOLATED) {
         Deal storage d = deals[dealIndex];
-        address sender = _msgSender();
+        address sender = msg.sender;
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
         if (sender == d.violator) revert ViolatorCannot();
         if (d.amount == 0) revert NoFunds();
@@ -806,7 +1009,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
             "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
             "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. `confirmSettlement` accepts the counterparty's proposal.\n\n"
             "## Gasless Transactions\n\n"
-            "If `trustedForwarder()` returns a non-zero address, all write operations can be executed gaslessly via the relayer. "
+            "All primary write operations support gasless execution via `BySig` variants. "
             "Use `relay` instead of `invoke` in the wallet skill -- the CLI handles EIP-712 signing and submission automatically.\n";
     }
 

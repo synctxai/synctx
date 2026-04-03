@@ -5,7 +5,7 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./XFollowVerifierSpec.sol";
 import "./IERC20.sol";
-import "./ERC2771Mixin.sol";
+import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 
 
@@ -15,7 +15,7 @@ import "./BindingAttestation.sol";
 ///         每个 B 的 claim() 创建一个新的 dealIndex。全自动，无需协商。
 /// @dev 生命周期：OPEN → CLOSED
 ///      无 constructor — 所有状态通过 initialize() 一次性设置（clone 兼容）。
-contract XFollowCampaign is DealBase, ERC2771Mixin {
+contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
 
     /// @dev Lock implementation against initialize() — clones are unaffected.
     constructor() {
@@ -131,10 +131,17 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     mapping(address => uint8) public failCount;
     mapping(address => uint256) internal pendingClaimIndex;  // B → 当前 pending 的 dealIndex
 
+    // ===================== BySig TYPEHASH 常量 =====================
+
+    bytes32 private constant _CLAIM_TYPEHASH = keccak256(
+        "ClaimBySig(uint64 userId,bytes32 bindingSigHash,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
     // ===================== 修饰器 =====================
 
     modifier onlyA() {
-        if (_msgSender() != partyA) revert NotPartyA();
+        if (msg.sender != partyA) revert NotPartyA();
         _;
     }
 
@@ -159,7 +166,6 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         uint96  protocolFee_,
         address requiredSpec_,
         address bindingAttestation_,
-        address trustedForwarder_,
         address partyA_,
         address verifier_,
         uint96  rewardPerFollow_,
@@ -174,8 +180,8 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
         _initialized = true;
         _lock = 1; // clone storage starts at 0; set to 1 for 1/2 reentrancy pattern
 
-        // ERC2771 初始化（forwarder 不可变更，admin = address(0)）
-        _initForwarder(trustedForwarder_, address(0));
+        // MetaTxMixin 初始化（clone 路径）
+        _initMetaTxDomain("XFollowCampaign", "1");
 
         // Config
         feeToken = feeToken_;
@@ -219,11 +225,27 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     /// @param userId B 的 Twitter immutable user_id
     /// @param bindingSig Platform 签发的绑定证明签名
     function claim(uint64 userId, bytes calldata bindingSig) external nonReentrant returns (uint256 dealIndex) {
+        return _claimCore(msg.sender, userId, bindingSig);
+    }
+
+    /// @notice B 领取关注奖励（gasless BySig 版本）
+    function claimBySig(uint64 userId, bytes calldata bindingSig, MetaTxProof calldata proof)
+        external nonReentrant returns (uint256 dealIndex)
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            _CLAIM_TYPEHASH,
+            userId, keccak256(bindingSig),
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        return _claimCore(proof.signer, userId, bindingSig);
+    }
+
+    function _claimCore(address sender, uint64 userId, bytes calldata bindingSig) internal returns (uint256 dealIndex) {
         // 检查并可能触发 auto-close
         _checkAndClose();
         if (campaignStatus != OPEN) revert CampaignNotOpen();
 
-        address sender = _msgSender();
         if (claimedAddress[sender]) revert AlreadyClaimed();
         if (claimedUserId[userId] != 0) revert AlreadyClaimed();
         if (failCount[sender] >= MAX_FAILURES) revert MaxFailures();

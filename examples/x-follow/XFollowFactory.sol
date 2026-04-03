@@ -5,7 +5,7 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
-import "./ERC2771Mixin.sol";
+import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 import "./Clones.sol";
 import "./XFollowCampaign.sol";
@@ -16,7 +16,7 @@ import "./XFollowCampaign.sol";
 ///         每个 clone 是独立的 campaign，参数创建时锁定。
 /// @dev Factory 的 dealIndex 计数 campaign 数量。
 ///      子合约的 dealIndex 计数 claim 数量。
-contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
+contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory", "1") {
 
     // ===================== 错误 =====================
 
@@ -67,6 +67,15 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
     /// @notice factory dealIndex → campaign 地址
     mapping(uint256 => address) public campaigns;
 
+    // ===================== BySig TYPEHASH 常量 =====================
+
+    bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
+        "CreateDealBySig(uint96 grossAmount,address verifier,uint96 verifierFee,"
+        "uint96 rewardPerFollow,uint256 sigDeadline,bytes32 sigHash,"
+        "uint64 target_user_id,uint48 campaignDeadline,"
+        "address signer,address relayer,uint256 nonce,uint256 deadline)"
+    );
+
     // ===================== 构造函数 =====================
 
     constructor(
@@ -113,8 +122,46 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
         uint64  target_user_id_,
         uint48  deadline_
     ) external nonReentrant returns (address campaign) {
+        return _createDealCore(msg.sender, grossAmount, verifier_, verifierFee_, rewardPerFollow_, sigDeadline, sig, target_user_id_, deadline_);
+    }
+
+    /// @notice A 创建新的 XFollowCampaign（gasless BySig 版本）
+    function createDealBySig(
+        uint96  grossAmount,
+        address verifier_,
+        uint96  verifierFee_,
+        uint96  rewardPerFollow_,
+        uint256 sigDeadline,
+        bytes calldata sig,
+        uint64  target_user_id_,
+        uint48  deadline_,
+        PermitData calldata permit,
+        MetaTxProof calldata proof
+    ) external nonReentrant returns (address campaign) {
+        bytes32 structHash = keccak256(abi.encode(
+            _CREATE_DEAL_TYPEHASH,
+            grossAmount, verifier_, verifierFee_,
+            rewardPerFollow_, sigDeadline, keccak256(sig),
+            target_user_id_, deadline_,
+            proof.signer, proof.relayer, proof.nonce, proof.deadline
+        ));
+        _verifyMetaTx(structHash, proof);
+        _executePermit(permit, proof.signer);
+        return _createDealCore(proof.signer, grossAmount, verifier_, verifierFee_, rewardPerFollow_, sigDeadline, sig, target_user_id_, deadline_);
+    }
+
+    function _createDealCore(
+        address sender,
+        uint96  grossAmount,
+        address verifier_,
+        uint96  verifierFee_,
+        uint96  rewardPerFollow_,
+        uint256 sigDeadline,
+        bytes calldata sig,
+        uint64  target_user_id_,
+        uint48  deadline_
+    ) internal returns (address campaign) {
         if (feeToken == address(0)) revert FeeTokenNotSet();
-        address sender = _msgSender();
 
         // 基础验证（详细验证由 campaign.initialize 完成）
         if (grossAmount < rewardPerFollow_ + verifierFee_ + PROTOCOL_FEE) revert InsufficientBudget();
@@ -132,7 +179,6 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
             PROTOCOL_FEE,
             REQUIRED_SPEC,
             address(BINDING_ATTESTATION),
-            trustedForwarder,
             sender,             // partyA
             verifier_,
             rewardPerFollow_,
@@ -231,7 +277,7 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
             "3. USDC is transferred from your wallet to the new campaign contract\n"
             "4. Campaign goes live immediately -- followers can claim rewards\n\n"
             "## Gasless\n\n"
-            "Both createDeal (A) and claim (B) support ERC2771 meta-transactions.\n"
+            "Both createDeal (A) and claim (B) support embedded EIP-712 meta-transactions.\n"
             "Gas is sponsored by the Developer via GasSponsorVault.\n";
     }
 }
