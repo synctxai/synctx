@@ -603,7 +603,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             "| 4 | TimedOut | Verification timed out and was reset. Budget refunded |\n"
             "| 5 | Inconclusive | API error. Budget fully refunded |\n"
             "| 255 | NotFound | Claim does not exist |\n\n"
-            "> **Timeout**: 30 minutes for verification. Remaining time = `claims(dealIndex).timestamp + 1800 - block.timestamp`.\n\n"
+            "> **Timeout**: 30 minutes from claim creation. Verification that exceeds this window can be reset by anyone via `resetVerification`.\n\n"
             "## Withdrawing Remaining Budget (A)\n\n"
             "1. Campaign must be CLOSED (A can call `closeCampaign()` at any time, or auto-triggered on deadline/budget exhaustion)\n"
             "2. If pending claims exist, wait for verification timeout (30 min), then call `resetVerification(dealIndex, 0)` for each\n"

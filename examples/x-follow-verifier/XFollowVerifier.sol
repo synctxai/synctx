@@ -12,13 +12,12 @@ import "./VerifierBase.sol";
 ///      Responsibilities:
 ///      - XFollowVerifierSpec: defines EIP-712 TYPEHASH, verifies signature validity
 ///      - XFollowVerifier (this contract): holds owner, DOMAIN_SEPARATOR, submits verification results, manages fees
-///      - Off-chain service: listens for VerificationRequested events, queries twitterapi.io + twitter-api45
-///        dual-source follow relationship in parallel, calls reportResult
+///      - Off-chain service: listens for VerificationRequested events, queries external data sources, and reports result
 contract XFollowVerifier is VerifierBase {
 
     // ============ Constants ============
 
-    /// @notice Off-chain service validates deadline <= now + MAX_SIGN_DEADLINE_SECONDS during signing
+    /// @notice Recommended off-chain signer policy: deadline <= now + MAX_SIGN_DEADLINE_SECONDS. NOT enforced on-chain.
     uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 30 days;
 
     // ============ Immutables ============

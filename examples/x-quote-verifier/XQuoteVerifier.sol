@@ -12,14 +12,13 @@ import "./VerifierBase.sol";
 ///      Responsibilities:
 ///      - XQuoteVerifierSpec: defines EIP-712 TYPEHASH, verifies signature validity
 ///      - XQuoteVerifier (this contract): holds owner, DOMAIN_SEPARATOR, submits verification results, manages fees
-///      - Off-chain service: listens for VerificationRequested events, calls X API for actual verification, calls reportResult
+///      - Off-chain service: listens for VerificationRequested events, queries off-chain X/Twitter data source, calls reportResult
 contract XQuoteVerifier is VerifierBase {
 
     // ============ Constants ============
 
-    /// @notice Off-chain service validates deadline ≤ now + MAX_SIGN_DEADLINE_SECONDS during signing
-    /// @dev Not additionally checked on-chain — createDeal's signature verification implicitly ensures the deadline is within range.
-    ///      This constant provides a standard parameter for off-chain services.
+    /// @notice Recommended off-chain signer policy: deadline ≤ now + MAX_SIGN_DEADLINE_SECONDS.
+    /// @dev NOT enforced on-chain. Off-chain signers should reject requests exceeding this window.
     uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 3600;
 
     // ============ Immutables ============

@@ -29,7 +29,7 @@ contract SettlementPriceVerifier is VerifierBase {
         return
             "Verify settlement prices for European options. "
             "Reports numeric price on-chain via settlementPriceOf(). "
-            "EIP-712 signed, max sign deadline 1 hour (3600s).";
+            "EIP-712 signed. Recommended signer policy: max deadline 1 hour (3600s), not enforced on-chain.";
     }
 
     function spec() external view override(VerifierBase) returns (address) {

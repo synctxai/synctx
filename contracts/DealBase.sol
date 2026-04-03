@@ -7,8 +7,8 @@ import "./IDeal.sol";
 /// @notice Implements IDeal. Subcontracts inherit and override all abstract methods.
 /// @dev Kept intentionally lightweight — no State enum, Deal struct, or storage.
 ///      Different deal types have vastly different state machines and data models.
-///      SECURITY: No owner, no admin, no proxy, no selfdestruct, no delegatecall.
-///      Trust comes from code transparency and audit, not from privileged roles.
+///      SECURITY: DealBase itself introduces no owner, admin, proxy, selfdestruct, or delegatecall.
+///      Subcontracts define their own permission model as needed.
 abstract contract DealBase is IDeal {
 
     // ===================== serviceMode Constants =====================

@@ -8,7 +8,7 @@ import "./VerifierSpec.sol";
 /// @dev Defines check() with EIP-712 signature verification.
 ///      check signature params (per-campaign): target_user_id(uint64)
 ///      specParams (per-claim verification): abi.encode(follower_user_id(uint64), target_user_id(uint64))
-///      Off-chain verification uses twitterapi.io + twitter-api45 dual-source follow relationship authentication
+///      Off-chain verification queries external follow-relationship providers
 contract XFollowVerifierSpec is VerifierSpec {
 
     // ============ Constants ============
