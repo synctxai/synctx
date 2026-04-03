@@ -1,10 +1,10 @@
-# Twitter Identity Binding
+# Twitter Binding
 
 ## When Is This Needed?
 
-Some DealContracts require participants to prove their Twitter identity before creating or accepting a deal. This is enforced **at the contract level** via Binding Attestation — a platform-signed proof that a wallet address is bound to a specific Twitter account.
+Some DealContracts require participants to prove their Twitter identity before creating or accepting a deal. This is enforced **at the contract level** — the participant must complete Twitter binding (linking their X account to their wallet address on the platform), then obtain a Twitter binding signature (`twitter-binding-sig`) as on-chain proof.
 
-**How to know if it's required**: Read the contract's `instruction()`. If it mentions "Binding Attestation", "Twitter binding", or requires a `bindingSignature` / `userId` parameter in `createDeal` or `acceptDeal`, complete this flow first.
+**How to know if it's required**: Read the contract's `instruction()`. If it mentions "Twitter binding" or requires a `bindingSignature` / `userId` parameter in `createDeal` or `acceptDeal`, complete this flow first.
 
 Both initiator and responder may need to complete binding independently — the contract determines which parties require it.
 
@@ -16,7 +16,7 @@ Before starting the full flow, check if you already have a verified binding:
 synctx twitter-binding --json
 ```
 
-- **Returns binding data** (`address`, `user_id`, `username`, `verified_at`): Skip to [Get Attestation](#get-attestation).
+- **Returns binding data** (`address`, `user_id`, `username`, `verified_at`): Skip to [Get Twitter Binding Sig](#get-twitter-binding-sig).
 - **Returns 404**: No binding exists — complete the [Verification Flow](#verification-flow) below.
 
 ## Verification Flow
@@ -54,19 +54,19 @@ synctx twitter-check --json
 |---|---|---|
 | `waiting_unfollow` | Still following — unfollow not detected yet | Wait 5s, retry |
 | `pending` | Follow not detected yet | Wait 5s, retry |
-| `verified` | Verification passed | Proceed to Get Attestation |
+| `verified` | Verification passed | Proceed to [Get Twitter Binding Sig](#get-twitter-binding-sig) |
 | `expired` | Challenge timed out | Start over from Step 1 |
 
 **Polling pattern**: `twitter-check` → if not `verified`, `sleep 5` → retry. Cap at 120s total.
 
 **Full flow for `waiting_unfollow`**: unfollow → `twitter-check` returns `pending` → follow → `twitter-check` returns `verified`.
 
-## Get Attestation
+## Get Twitter Binding Sig
 
-Once verified, retrieve the binding attestation signature:
+Once verified, retrieve the Twitter binding signature:
 
 ```bash
-synctx get-attestation --json
+synctx twitter-binding-sig --json
 ```
 
 Returns:
@@ -84,11 +84,11 @@ Use `user_id` and `signature` as parameters when calling the contract's `createD
 
 | Error | Handling |
 |---|---|
-| `Address already verified` (409) | Already bound — skip to `get-attestation` |
+| `Address already verified` (409) | Already bound — skip to `twitter-binding-sig` |
 | `Twitter account already bound to another address` (409) | This Twitter account is linked to a different wallet. Use the correct wallet or contact support |
 | `Twitter user not found` (404) | Username is incorrect — double-check and retry |
 | `Twitter API unavailable` (502) | Temporary — wait 30s and retry |
 | `Challenge expired` | Start over from `twitter-verify` |
-| `No verified binding` on `get-attestation` (404) | Complete the verification flow first |
-| `Attestation service unavailable` (503) | Platform signer not configured — report to user |
+| `No verified binding` on `twitter-binding-sig` (404) | Complete the verification flow first |
+| `Twitter binding signature service unavailable` (503) | Platform signer not configured — report to user |
 | `Rate limited` (429) | Wait 60s then retry |
