@@ -485,7 +485,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     }
 
     function description() external pure override returns (string memory) {
-        return "Campaign: pay fixed USDC reward per X follow. 1-to-many, auto-verified via twitterapi.io + twitter-api45. Binding Attestation required.";
+        return "Campaign: pay fixed USDC reward per X follow. 1-to-many, auto-verified. Binding Attestation required.";
     }
 
     function tags() external pure override returns (string[] memory) {
@@ -565,19 +565,26 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         return
             "# X Follow Campaign\n\n"
             "Pay fixed USDC reward per follow to a target account on X. 1-to-many campaign model.\n\n"
+            "- **A (Creator)**: Deposits USDC budget, sets target account and reward per follow\n"
+            "- **B (Follower)**: Follows the target account on X, claims reward\n"
+            "- Verification is fully automatic; B receives reward on pass\n\n"
+            "| Item | Value |\n"
+            "|----|----|\n"
+            "| Token | USDC (decimals=6), address via `feeToken()` |\n"
+            "| Amount | Raw value x10^6, e.g. 1.5 USDC = `1500000` |\n\n"
             "## Campaign Lifecycle\n\n"
             "OPEN -> CLOSED\n\n"
             "- **OPEN**: Campaign goes live immediately after initialization. Params are locked, anyone with Binding Attestation can claim().\n"
-            "- **CLOSED**: Auto-triggered on deadline or budget exhaustion. A calls withdrawRemaining().\n\n"
+            "- **CLOSED**: Auto-triggered on deadline or budget exhaustion. A calls `closeCampaign()` or it closes automatically.\n\n"
             "## For Followers (B)\n\n"
             "1. Complete Twitter verification on Platform to get Binding Attestation\n"
             "2. Follow the target account on X\n"
-            "3. Call `claim(userId, bindingSig)` with your attestation\n"
-            "4. Wait for verification result\n\n"
+            "3. Call `claim(userId, bindingSig)` — userId is your Twitter immutable user_id (uint64), bindingSig is the Binding Attestation signature (bytes)\n"
+            "4. Wait for automatic verification result\n\n"
+            "**Pre-flight**: Call `canClaim(addr, userId, bindingSig)` before claim() to check eligibility (address + userId dedup + binding attestation + budget).\n\n"
             "## Costs\n\n"
             "B pays nothing. All fees (reward + verifierFee + protocolFee) come from A's budget.\n"
-            "Query `claimCost()` for per-claim cost, `remainingSlots()` for available claims.\n"
-            "Query `canClaim(addr, userId, bindingSig)` for full pre-flight check (address + userId dedup + binding attestation).\n\n"
+            "Query `claimCost()` for per-claim cost, `remainingSlots()` for available claims.\n\n"
             "## Fee Policy\n\n"
             "- Successful claim: reward to B, verifierFee to Verifier, protocolFee to Developer.\n"
             "- Failed claim (not following): only verifierFee deducted, reward + protocolFee refunded to budget.\n"
@@ -585,9 +592,24 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             "## Failure Policy\n\n"
             "Failed claims (not following) increment failCount. After 3 failures, banned from this campaign.\n"
             "Inconclusive results (API errors) do not count as failures.\n\n"
+            "## dealStatus Action Guide (per-claim)\n\n"
+            "Each `claim()` creates a new dealIndex. `dealStatus(dealIndex)` returns the claim's current status:\n\n"
+            "| Code | Status | Action |\n"
+            "|----|------|------|\n"
+            "| 0 | Verifying | Wait for automatic verification result |\n"
+            "| 1 | VerifierTimedOut | Anyone: `resetVerification(dealIndex, 0)` to refund budget |\n"
+            "| 2 | Completed | Reward paid to B. No action needed |\n"
+            "| 3 | Rejected | B was not following. No action (verifierFee deducted from budget) |\n"
+            "| 4 | TimedOut | Verification timed out and was reset. Budget refunded |\n"
+            "| 5 | Inconclusive | API error. Budget fully refunded |\n"
+            "| 255 | NotFound | Claim does not exist |\n\n"
+            "> **Timeout**: 30 minutes for verification. Use `timeRemaining(dealIndex)` to query remaining seconds.\n\n"
             "## Withdrawing Remaining Budget (A)\n\n"
             "1. Campaign must be CLOSED (auto on deadline/budget, or call `closeCampaign()`)\n"
             "2. If pending claims exist, wait for verification timeout (30 min), then call `resetVerification(dealIndex, 0)` for each\n"
-            "3. Once `pendingClaims == 0`, call `withdrawRemaining()` to reclaim budget\n";
+            "3. Once `pendingClaims == 0`, call `withdrawRemaining()` to reclaim budget\n\n"
+            "## Gasless Transactions\n\n"
+            "claim() supports gasless execution via `claimBySig` variant. "
+            "Use `relay` instead of `invoke` in the wallet skill.\n";
     }
 }

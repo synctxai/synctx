@@ -37,8 +37,7 @@ contract XFollowVerifierSpec is VerifierSpec {
             "X/Twitter follow verification spec (campaign model). EIP-712 signature check. "
             "Result type: Boolean (1=yes, -1=no). "
             "Signature: per-campaign, signs target_user_id + fee + deadline. "
-            "specParams: abi.encode(follower_user_id, target_user_id). "
-            "Off-chain verification uses dual providers: twitterapi.io + twitter-api45 (RapidAPI).";
+            "specParams: abi.encode(follower_user_id, target_user_id).";
     }
 
     // ============ 签名验证 ============
