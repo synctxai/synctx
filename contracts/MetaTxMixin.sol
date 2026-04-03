@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title MetaTxMixin - 嵌入式 meta-transaction 支持
-/// @dev 每个合约自己验签、自己记 nonce，不依赖外部 forwarder。
-///      继承此 mixin 的合约通过 BySig 函数提供 gasless 入口。
-///      constructor 路径传 (name, version)；clone 路径在 initialize() 中调用 _initMetaTxDomain()。
+/// @title MetaTxMixin - Embedded meta-transaction support
+/// @dev Each contract verifies signatures and tracks nonces itself; no external forwarder dependency.
+///      Contracts inheriting this mixin provide gasless entry points via BySig functions.
+///      Constructor path passes (name, version); clone path calls _initMetaTxDomain() in initialize().
 abstract contract MetaTxMixin {
 
-    // ===================== 错误 =====================
+    // ===================== Errors =====================
 
     error MetaTxInvalidSignature();
     error MetaTxExpired();
@@ -15,22 +15,22 @@ abstract contract MetaTxMixin {
     error MetaTxUnauthorizedRelayer();
     error PermitFailed();
 
-    // ===================== 类型 =====================
+    // ===================== Types =====================
 
-    /// @dev Meta-transaction 签名证明
+    /// @dev Meta-transaction signature proof
     struct MetaTxProof {
-        address signer;      // 真实用户地址
-        address relayer;     // 授权提交者（address(0) = 任意人可提交）
-        uint256 nonce;       // signer 在本合约的当前 nonce
-        uint256 deadline;    // 签名有效期 (Unix 秒)
-        bytes   signature;   // 65 字节 ECDSA 签名
+        address signer;      // Actual user address
+        address relayer;     // Authorized submitter (address(0) = anyone can submit)
+        uint256 nonce;       // Signer's current nonce in this contract
+        uint256 deadline;    // Signature validity (Unix seconds)
+        bytes   signature;   // 65-byte ECDSA signature
     }
 
-    /// @dev EIP-2612 Permit 参数（spender 固定为 address(this)）
+    /// @dev EIP-2612 Permit parameters (spender is fixed to address(this))
     struct PermitData {
-        address token;       // ERC20 token 地址（address(0) = 不需要 permit）
-        uint256 value;       // 授权金额
-        uint256 deadline;    // permit 有效期
+        address token;       // ERC20 token address (address(0) = no permit needed)
+        uint256 value;       // Approval amount
+        uint256 deadline;    // Permit validity
         uint8   v;
         bytes32 r;
         bytes32 s;
@@ -52,15 +52,15 @@ abstract contract MetaTxMixin {
 
     mapping(address => uint256) public nonces;
 
-    // ===================== 初始化 =====================
+    // ===================== Initialization =====================
 
-    /// @dev Constructor 路径：普通合约直接传 name/version
+    /// @dev Constructor path: regular contracts pass name/version directly
     constructor(string memory name_, string memory version_) {
         _initMetaTxDomain(name_, version_);
     }
 
-    /// @dev Clone 路径：在 initialize() 中调用
-    ///      也可被 constructor 调用（constructor 传参后自动调用）
+    /// @dev Clone path: called in initialize()
+    ///      Can also be called by the constructor (constructor passes params then calls automatically)
     function _initMetaTxDomain(string memory name_, string memory version_) internal {
         _hashedName = keccak256(bytes(name_));
         _hashedVersion = keccak256(bytes(version_));
@@ -70,7 +70,7 @@ abstract contract MetaTxMixin {
 
     // ===================== Domain Separator =====================
 
-    /// @notice 当前链的 EIP-712 domain separator（链分叉时自动重算）
+    /// @notice Current chain's EIP-712 domain separator (auto-recomputed on chain fork)
     function DOMAIN_SEPARATOR() public view returns (bytes32) {
         if (block.chainid == _cachedChainId && _cachedDomainSeparator != bytes32(0)) {
             return _cachedDomainSeparator;
@@ -85,25 +85,25 @@ abstract contract MetaTxMixin {
         ));
     }
 
-    // ===================== 核心验证 =====================
+    // ===================== Core Verification =====================
 
-    /// @dev 验证 EIP-712 签名并消耗 nonce。
-    ///      ★ nonce 在返回前递增（CEI 模式），后续外部调用无法重入。
-    /// @param structHash 业务 typed struct 的 keccak256 哈希
-    /// @param proof 用户的 meta-tx 签名证明
+    /// @dev Verify EIP-712 signature and consume nonce.
+    ///      Nonce is incremented before return (CEI pattern); subsequent external calls cannot re-enter.
+    /// @param structHash keccak256 hash of the business typed struct
+    /// @param proof User's meta-tx signature proof
     function _verifyMetaTx(bytes32 structHash, MetaTxProof calldata proof) internal {
-        // 1. Relayer 绑定（address(0) = 任意人可提交）
+        // 1. Relayer binding (address(0) = anyone can submit)
         if (proof.relayer != address(0) && msg.sender != proof.relayer)
             revert MetaTxUnauthorizedRelayer();
 
         // 2. Deadline
         if (block.timestamp > proof.deadline) revert MetaTxExpired();
 
-        // 3. Nonce（CEI：在签名验证和任何外部调用之前消耗）
+        // 3. Nonce (CEI: consumed before signature verification and any external call)
         if (nonces[proof.signer] != proof.nonce) revert MetaTxNonceMismatch();
         nonces[proof.signer] = proof.nonce + 1;
 
-        // 4. 签名验证
+        // 4. Signature verification
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01", DOMAIN_SEPARATOR(), structHash
         ));
@@ -112,10 +112,10 @@ abstract contract MetaTxMixin {
             revert MetaTxInvalidSignature();
     }
 
-    // ===================== Permit 辅助 =====================
+    // ===================== Permit Helper =====================
 
-    /// @dev 执行 EIP-2612 permit，容忍 front-running（Uniswap V3 标准做法）。
-    ///      permit.token == address(0) 时跳过。spender 固定为 address(this)。
+    /// @dev Execute EIP-2612 permit, tolerating front-running (Uniswap V3 standard practice).
+    ///      Skipped when permit.token == address(0). Spender is fixed to address(this).
     function _executePermit(PermitData calldata permit, address owner) internal {
         if (permit.token == address(0)) return;
         try IERC20Permit(permit.token).permit(
@@ -128,7 +128,7 @@ abstract contract MetaTxMixin {
         }
     }
 
-    // ===================== 签名工具 =====================
+    // ===================== Signature Utilities =====================
 
     function _recoverSigner(bytes32 digest, bytes calldata sig)
         private pure returns (address)
@@ -139,11 +139,11 @@ abstract contract MetaTxMixin {
         bytes32 s = bytes32(sig[32:64]);
         uint8 v = uint8(bytes1(sig[64:65]));
 
-        // v 归一化（兼容 0/1 和 27/28 两种格式）
+        // Normalize v (compatible with 0/1 and 27/28 formats)
         if (v < 27) v += 27;
         if (v != 27 && v != 28) revert MetaTxInvalidSignature();
 
-        // EIP-2: 拒绝 malleable signatures (high-s)
+        // EIP-2: reject malleable signatures (high-s)
         if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0)
             revert MetaTxInvalidSignature();
 
@@ -151,7 +151,7 @@ abstract contract MetaTxMixin {
     }
 }
 
-/// @dev 最小 EIP-2612 Permit 接口
+/// @dev Minimal EIP-2612 Permit interface
 interface IERC20Permit {
     function permit(address owner, address spender, uint256 value,
         uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;

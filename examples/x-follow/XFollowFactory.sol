@@ -11,14 +11,14 @@ import "./Clones.sol";
 import "./XFollowCampaign.sol";
 
 
-/// @title XFollowFactory - X 付费关注 Campaign 工厂合约
-/// @notice Developer 部署此合约。A 通过 createDeal() 创建 XFollowCampaign clone。
-///         每个 clone 是独立的 campaign，参数创建时锁定。
-/// @dev Factory 的 dealIndex 计数 campaign 数量。
-///      子合约的 dealIndex 计数 claim 数量。
+/// @title XFollowFactory - X Paid Follow Campaign Factory Contract
+/// @notice Developer deploys this contract. A creates XFollowCampaign clones via createDeal().
+///         Each clone is an independent campaign with parameters locked at creation.
+/// @dev Factory's dealIndex counts campaigns.
+///      Sub-contract's dealIndex counts claims.
 contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory", "1") {
 
-    // ===================== 错误 =====================
+    // ===================== Errors =====================
 
     error InvalidParams();
     error TransferFailed();
@@ -28,28 +28,28 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
     error InsufficientBudget();
     error FeeTokenNotSet();
 
-    // ===================== 常量 =====================
+    // ===================== Constants =====================
 
     uint96 public constant MIN_PROTOCOL_FEE = 10_000;
 
-    // ===================== 不可变配置 =====================
+    // ===================== Immutable Config =====================
 
-    /// @notice XFollowCampaign 实现合约地址（clone 的 implementation）
+    /// @notice XFollowCampaign implementation contract address (clone source)
     address public immutable IMPLEMENTATION;
 
-    /// @notice 协议费收集合约
+    /// @notice Protocol fee collector contract
     address public immutable FEE_COLLECTOR;
 
-    /// @notice 每次 claim 的协议费
+    /// @notice Per-claim protocol fee
     uint96 public immutable PROTOCOL_FEE;
 
-    /// @notice 允许的 VerifierSpec 地址
+    /// @notice Allowed VerifierSpec address
     address public immutable REQUIRED_SPEC;
 
-    /// @notice Binding Attestation 认证合约
+    /// @notice Binding Attestation verification contract
     BindingAttestation public immutable BINDING_ATTESTATION;
 
-    // ===================== 重入保护 =====================
+    // ===================== Reentrancy Guard =====================
 
     uint256 private _lock = 1;
 
@@ -62,12 +62,12 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
 
     error Reentrancy();
 
-    // ===================== Campaign 追踪 =====================
+    // ===================== Campaign Tracking =====================
 
-    /// @notice factory dealIndex → campaign 地址
+    /// @notice Factory dealIndex → campaign address
     mapping(uint256 => address) public campaigns;
 
-    // ===================== BySig TYPEHASH 常量 =====================
+    // ===================== BySig TYPEHASH Constants =====================
 
     bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
         "CreateDealBySig(uint96 grossAmount,address verifier,uint96 verifierFee,"
@@ -76,7 +76,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         "address signer,address relayer,uint256 nonce,uint256 deadline)"
     );
 
-    // ===================== 构造函数 =====================
+    // ===================== Constructor =====================
 
     constructor(
         address implementation_,
@@ -100,18 +100,18 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         BINDING_ATTESTATION = BindingAttestation(bindingAttestation_);
     }
 
-    // ===================== Campaign 创建 =====================
+    // ===================== Campaign Creation =====================
 
-    /// @notice A 创建新的 XFollowCampaign（通过 EIP-1167 clone）
-    /// @param grossAmount A 存入的 USDC 总预算
-    /// @param verifier_ Verifier 合约地址
-    /// @param verifierFee_ 每次 claim 的 Verifier 费用
-    /// @param rewardPerFollow_ 每次成功 claim 的 B 奖励
-    /// @param sigDeadline Verifier 签名的 deadline
-    /// @param sig Verifier 的 EIP-712 签名
-    /// @param target_user_id_ 目标 Twitter user_id
-    /// @param deadline_ Campaign 截止时间
-    /// @return campaign 新创建的 XFollowCampaign 地址
+    /// @notice A creates a new XFollowCampaign (via EIP-1167 clone)
+    /// @param grossAmount Total USDC budget deposited by A
+    /// @param verifier_ Verifier contract address
+    /// @param verifierFee_ Per-claim Verifier fee
+    /// @param rewardPerFollow_ Reward per successful follow claim
+    /// @param sigDeadline Verifier signature deadline
+    /// @param sig Verifier's EIP-712 signature
+    /// @param target_user_id_ Target Twitter user_id
+    /// @param deadline_ Campaign end time
+    /// @return campaign The newly created XFollowCampaign address
     function createDeal(
         uint96  grossAmount,
         address verifier_,
@@ -125,7 +125,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         return _createDealCore(msg.sender, grossAmount, verifier_, verifierFee_, rewardPerFollow_, sigDeadline, sig, target_user_id_, deadline_);
     }
 
-    /// @notice A 创建新的 XFollowCampaign（gasless BySig 版本）
+    /// @notice A creates a new XFollowCampaign (gasless BySig version)
     function createDealBySig(
         uint96  grossAmount,
         address verifier_,
@@ -163,16 +163,16 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
     ) internal returns (address campaign) {
         if (feeToken == address(0)) revert FeeTokenNotSet();
 
-        // 基础验证（详细验证由 campaign.initialize 完成）
+        // Basic validation (detailed validation done by campaign.initialize)
         if (grossAmount < rewardPerFollow_ + verifierFee_ + PROTOCOL_FEE) revert InsufficientBudget();
 
         // 1. Clone
         campaign = Clones.clone(IMPLEMENTATION);
 
-        // 2. USDC 从 A 转入 campaign
+        // 2. Transfer USDC from A to campaign
         if (!IERC20(feeToken).transferFrom(sender, campaign, grossAmount)) revert TransferFailed();
 
-        // 3. 初始化 clone
+        // 3. Initialize clone
         XFollowCampaign(campaign).initialize(
             feeToken,
             FEE_COLLECTOR,
@@ -190,7 +190,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
             sig
         );
 
-        // 4. 记录到 factory（dealIndex = campaign 序号）
+        // 4. Record in factory (dealIndex = campaign sequence number)
         address[] memory traders = new address[](1);
         traders[0] = sender;
         address[] memory verifiers = new address[](1);
@@ -198,11 +198,11 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         uint256 campaignIndex = _recordStart(traders, verifiers);
         campaigns[campaignIndex] = campaign;
 
-        // 5. 平台自动发现
+        // 5. Platform auto-discovery
         emit SubContractCreated(campaign);
     }
 
-    // ===================== IDeal 实现（Factory 层） =====================
+    // ===================== IDeal Implementation (Factory Level) =====================
 
     function name() external pure override returns (string memory) {
         return "X(Twitter) Follow Campaign Builder";
@@ -239,7 +239,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         return specs;
     }
 
-    /// @notice Factory 层不提供 per-claim 验证参数，请查询具体的 campaign 子合约
+    /// @notice Factory does not provide per-claim verification params; query the specific campaign sub-contract
     function verificationParams(uint256, uint256)
         external pure override
         returns (address, uint256, uint256, bytes memory, bytes memory)
@@ -247,18 +247,18 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         revert("query campaign contract directly");
     }
 
-    /// @notice Factory 不接受验证请求
+    /// @notice Factory does not accept verification requests
     function requestVerification(uint256, uint256) external pure override {
         revert("query campaign contract directly");
     }
 
-    /// @notice Factory 层 phase：1=Created（campaign 已部署）
+    /// @notice Factory-level phase: 1=Created (campaign deployed)
     function phase(uint256 dealIndex) external view override returns (uint8) {
         if (campaigns[dealIndex] == address(0)) return 0; // NotFound
         return 1; // Created
     }
 
-    /// @notice Factory 层 dealStatus：返回 campaign 地址是否存在
+    /// @notice Factory-level dealStatus: whether the campaign address exists
     function dealStatus(uint256 dealIndex) external view override returns (uint8) {
         if (campaigns[dealIndex] == address(0)) return 255; // NOT_FOUND
         return 1; // CREATED

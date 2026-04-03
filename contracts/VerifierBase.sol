@@ -6,62 +6,62 @@ import "./IDeal.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
 
-/// @title VerifierBase - 验证者抽象基类
-/// @notice 提供通用的验证者功能：owner 管理、DOMAIN_SEPARATOR、结果提交、费用提取。
-/// @dev check() 和 EIP-712 验证逻辑在 VerifierSpec 合约中，不在此处。
-///      VerifierBase 暴露 DOMAIN_SEPARATOR（public view）和 signer（public）
-///      供 Spec 的 check() 读取。DOMAIN_SEPARATOR 支持链分叉时动态重算。
-///      角色分离：owner（cold key）管理合约和提取费用，signer（hot key）签名和提交结果。
+/// @title VerifierBase - Abstract base class for verifiers
+/// @notice Provides common verifier functionality: owner management, DOMAIN_SEPARATOR, result submission, fee withdrawal.
+/// @dev check() and EIP-712 verification logic are in VerifierSpec contracts, not here.
+///      VerifierBase exposes DOMAIN_SEPARATOR (public view) and signer (public)
+///      for Spec's check() to read. DOMAIN_SEPARATOR supports dynamic recomputation on chain forks.
+///      Role separation: owner (cold key) manages contract and withdraws fees, signer (hot key) signs and submits results.
 abstract contract VerifierBase is IVerifier, Initializable {
 
-    // ============ 错误 ============
+    // ============ Errors ============
 
-    error NotOwner();          // 调用者不是 owner
-    error NotSigner();         // 调用者不是 signer
-    error ZeroAddress();       // 地址为零
-    error WithdrawFailed();    // 提取费用失败
-    error SignerMustBeEOA();   // signer 必须是 EOA（用于 EIP-712 签名）
-    error NoPendingOwner();    // 没有待确认的 pendingOwner
-    error FeeNotReceived();    // DealContract 未支付预期的验证费
-    error FeeTokenNotSet();    // feeToken 未设置
+    error NotOwner();          // Caller is not the owner
+    error NotSigner();         // Caller is not the signer
+    error ZeroAddress();       // Address is zero
+    error WithdrawFailed();    // Fee withdrawal failed
+    error SignerMustBeEOA();   // Signer must be an EOA (for EIP-712 signing)
+    error NoPendingOwner();    // No pending owner to confirm
+    error FeeNotReceived();    // DealContract did not pay the expected verification fee
+    error FeeTokenNotSet();    // feeToken not set
 
-    // ============ 事件 ============
+    // ============ Events ============
 
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SignerChanged(address indexed previousSigner, address indexed newSigner);
     event FeesWithdrawn(address indexed to, uint256 amount);
 
-    // ============ 常量 ============
-    // EIP-712 域类型哈希，用于构造 DOMAIN_SEPARATOR。
+    // ============ Constants ============
+    // EIP-712 domain type hash, used to construct DOMAIN_SEPARATOR.
 
     bytes32 public constant DOMAIN_TYPEHASH = keccak256(
         "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
     );
 
-    // ============ 不可变量 ============
+    // ============ Immutables ============
 
-    /// @dev 部署时缓存的 DOMAIN_SEPARATOR 和 chainId，用于动态 fallback
+    /// @dev Cached DOMAIN_SEPARATOR and chainId at deployment, used for dynamic fallback
     bytes32 private immutable _CACHED_DOMAIN_SEPARATOR;
     uint256 private immutable _CACHED_CHAIN_ID;
     bytes32 private immutable _HASHED_NAME;
     bytes32 private immutable _HASHED_VERSION;
 
-    /// @dev Verifier 实例名称
+    /// @dev Verifier instance name
     string private _name;
 
-    // ============ 状态 ============
+    // ============ State ============
 
-    /// @notice 合约 owner（cold key：管理合约、提取费用）
+    /// @notice Contract owner (cold key: manages contract, withdraws fees)
     address public owner;
 
-    /// @notice 签名者（hot key：签 EIP-712 报价、提交验证结果）
+    /// @notice Signer (hot key: signs EIP-712 quotes, submits verification results)
     address public override signer;
 
-    /// @notice Ownable2Step：待确认的新 owner
+    /// @notice Ownable2Step: pending new owner
     address public pendingOwner;
 
-    // ============ 修饰器 ============
+    // ============ Modifiers ============
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -73,10 +73,10 @@ abstract contract VerifierBase is IVerifier, Initializable {
         _;
     }
 
-    // ============ 构造函数 ============
-    // 初始化 owner（部署者）、名称，缓存 EIP-712 DOMAIN_SEPARATOR。
-    // DOMAIN_SEPARATOR 在链分叉（chainId 变化）时自动重算。
-    // feeToken 通过 setFeeToken() 在部署后一次性设置（跨链统一地址）。
+    // ============ Constructor ============
+    // Initializes owner (deployer), name, and caches EIP-712 DOMAIN_SEPARATOR.
+    // DOMAIN_SEPARATOR is automatically recomputed on chain forks (chainId change).
+    // feeToken is set via setFeeToken() after deployment (cross-chain unified address).
 
     constructor(string memory name_, string memory version_) {
         _setInitializer();
@@ -89,7 +89,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
         _CACHED_DOMAIN_SEPARATOR = _buildDomainSeparator();
     }
 
-    /// @notice 返回当前链的 DOMAIN_SEPARATOR（链分叉时自动重算）
+    /// @notice Returns current chain's DOMAIN_SEPARATOR (auto-recomputed on chain fork)
     function DOMAIN_SEPARATOR() public view override returns (bytes32) {
         return block.chainid == _CACHED_CHAIN_ID
             ? _CACHED_DOMAIN_SEPARATOR
@@ -103,18 +103,18 @@ abstract contract VerifierBase is IVerifier, Initializable {
         ));
     }
 
-    // ============ Owner 管理（Ownable2Step） ============
-    // 两步转移：transferOwnership 设置 pendingOwner，acceptOwnership 确认生效。
-    // owner 可以是 EOA 或合约（如 multisig），signer 必须是 EOA。
+    // ============ Owner Management (Ownable2Step) ============
+    // Two-step transfer: transferOwnership sets pendingOwner, acceptOwnership confirms.
+    // Owner can be an EOA or contract (e.g. multisig); signer must be an EOA.
 
-    /// @notice 发起所有权转移（第一步）
+    /// @notice Initiate ownership transfer (step 1)
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
         pendingOwner = newOwner;
         emit OwnershipTransferStarted(owner, newOwner);
     }
 
-    /// @notice 接受所有权转移（第二步，由 pendingOwner 调用）
+    /// @notice Accept ownership transfer (step 2, called by pendingOwner)
     function acceptOwnership() external {
         if (msg.sender != pendingOwner) revert NoPendingOwner();
         address oldOwner = owner;
@@ -123,7 +123,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
         emit OwnershipTransferred(oldOwner, msg.sender);
     }
 
-    /// @notice 更换签名者（仅 owner）
+    /// @notice Change the signer (owner only)
     function setSigner(address newSigner) external onlyOwner {
         if (newSigner == address(0)) revert ZeroAddress();
         if (newSigner.code.length > 0) revert SignerMustBeEOA();
@@ -132,14 +132,14 @@ abstract contract VerifierBase is IVerifier, Initializable {
         emit SignerChanged(oldSigner, newSigner);
     }
 
-    // ============ IVerifier 实现 ============
+    // ============ IVerifier Implementation ============
 
     /// @inheritdoc IVerifier
-    /// @dev 通过检查 onVerificationResult 调用前后的 feeToken 余额变化来确认 DealContract 已支付验证费。
-    ///      如果余额增加量 < expectedFee，交易 revert，验证结果不会被提交。
-    ///      这保证了 Verifier 提交结果 = 收到费用，两者原子性完成。
-    ///      当 result == 0（inconclusive）时，DealContract 将 fee 退还给请求方/预算，
-    ///      Verifier 不会收到费用，因此跳过余额检查。
+    /// @dev Checks feeToken balance before/after onVerificationResult to confirm DealContract paid the verification fee.
+    ///      If balance increase < expectedFee, the tx reverts and the result is NOT submitted.
+    ///      This guarantees that submitting result = receiving fee, atomically.
+    ///      When result == 0 (inconclusive), DealContract refunds the fee to the requester/budget,
+    ///      so the Verifier does not receive a fee — balance check is skipped.
     function reportResult(
         address dealContract,
         uint256 dealIndex,
@@ -170,16 +170,16 @@ abstract contract VerifierBase is IVerifier, Initializable {
     /// @dev IERC165 interfaceId = bytes4(keccak256("supportsInterface(bytes4)"))
     bytes4 private constant _IERC165_ID = 0x01ffc9a7;
 
-    /// @notice ERC-165 接口检测
+    /// @notice ERC-165 interface detection
     function supportsInterface(bytes4 interfaceId) external pure virtual override returns (bool) {
         return interfaceId == type(IVerifier).interfaceId
             || interfaceId == _IERC165_ID;
     }
 
-    // ============ 费用提取 ============
-    // owner 可以将累积在合约中的 USDC 验证费提取到指定地址。
+    // ============ Fee Withdrawal ============
+    // Owner can withdraw accumulated USDC verification fees from the contract to a specified address.
 
-    /// @notice 从此合约提取 USDC（仅 owner）
+    /// @notice Withdraw fees from this contract (owner only)
     function withdrawFees(address to, uint256 amount) external onlyOwner {
         if (feeToken == address(0)) revert FeeTokenNotSet();
         if (to == address(0)) revert ZeroAddress();

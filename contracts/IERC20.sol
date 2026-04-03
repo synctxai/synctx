@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title IERC20 - 标准 ERC-20 接口（与 OpenZeppelin IERC20 兼容）
-/// @dev 函数签名与 OpenZeppelin IERC20 完全一致，可随时替换为 OZ 依赖。
+/// @title IERC20 - Standard ERC-20 interface (OpenZeppelin IERC20 compatible)
+/// @dev Function signatures are identical to OpenZeppelin IERC20; can be swapped for the OZ dependency at any time.
 interface IERC20 {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);

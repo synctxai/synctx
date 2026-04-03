@@ -1,38 +1,38 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title BindingAttestation - Platform 绑定证明验证合约
-/// @notice 统一验证 Platform 签发的 (address, userId) 绑定签名。
-///         所有需要 Twitter 绑定的 Deal 合约调用本合约的 verify()，
-///         不再各自实现 _verifyBinding()。
+/// @title BindingAttestation - Platform binding attestation verification contract
+/// @notice Unified verification of Platform-issued (address, userId) binding signatures.
+///         All Deal contracts requiring Twitter binding call this contract's verify(),
+///         instead of implementing _verifyBinding() individually.
 ///
-/// @dev 安全模型：
-///   - platformSigner 是 Platform 用于签发 Binding Attestation 的 EOA 地址
-///   - 密钥轮换：owner 调用 setPlatformSigner() 更新，所有旧签名自动失效
-///   - 所有权：Ownable2Step，防止误转
+/// @dev Security model:
+///   - platformSigner is the Platform EOA used to issue Binding Attestations
+///   - Key rotation: owner calls setPlatformSigner() to update; all old signatures auto-invalidate
+///   - Ownership: Ownable2Step, prevents accidental transfers
 contract BindingAttestation {
 
-    // ===================== 状态 =====================
+    // ===================== State =====================
 
     address public owner;
     address public pendingOwner;
     address public platformSigner;
 
-    // ===================== 事件 =====================
+    // ===================== Events =====================
 
     event PlatformSignerUpdated(address indexed oldSigner, address indexed newSigner);
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    // ===================== 错误 =====================
+    // ===================== Errors =====================
 
     error ZeroAddress();
     error NotOwner();
     error NotPendingOwner();
 
-    // ===================== 构造函数 =====================
+    // ===================== Constructor =====================
 
-    /// @param platformSigner_ Platform 签名 EOA 地址
+    /// @param platformSigner_ Platform signing EOA address
     constructor(address platformSigner_) {
         if (platformSigner_ == address(0)) revert ZeroAddress();
         owner = msg.sender;
@@ -41,13 +41,13 @@ contract BindingAttestation {
         emit PlatformSignerUpdated(address(0), platformSigner_);
     }
 
-    // ===================== 验签 =====================
+    // ===================== Signature Verification =====================
 
-    /// @notice 验证 Platform 对 (address, userId) 的 eth_sign 签名
-    /// @param addr  被绑定的 EVM 地址
-    /// @param userId Twitter 不可变 user_id
-    /// @param sig   Platform 对 keccak256(abi.encodePacked(addr, userId)) 的签名（65 字节）
-    /// @return true 当且仅当签名有效且签名者 == platformSigner
+    /// @notice Verify Platform's eth_sign signature for (address, userId) binding
+    /// @param addr  The bound EVM address
+    /// @param userId Twitter immutable user_id
+    /// @param sig   Platform's signature of keccak256(abi.encodePacked(addr, userId)) (65 bytes)
+    /// @return true if and only if the signature is valid and the signer == platformSigner
     function verify(address addr, uint64 userId, bytes calldata sig) external view returns (bool) {
         bytes32 hash = keccak256(abi.encodePacked(addr, userId));
         bytes32 ethHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
@@ -70,10 +70,10 @@ contract BindingAttestation {
         return recovered == platformSigner;
     }
 
-    // ===================== 管理函数 =====================
+    // ===================== Admin Functions =====================
 
-    /// @notice 更新 platformSigner（密钥轮换）
-    /// @dev 更新后所有旧签名自动失效，用户需重新获取 attestation
+    /// @notice Update platformSigner (key rotation)
+    /// @dev After update, all old signatures are auto-invalidated; users must re-obtain attestations
     function setPlatformSigner(address newSigner) external {
         _onlyOwner();
         if (newSigner == address(0)) revert ZeroAddress();
@@ -99,7 +99,7 @@ contract BindingAttestation {
         emit OwnershipTransferred(old, msg.sender);
     }
 
-    // ===================== 内部 =====================
+    // ===================== Internal =====================
 
     function _onlyOwner() internal view {
         if (msg.sender != owner) revert NotOwner();

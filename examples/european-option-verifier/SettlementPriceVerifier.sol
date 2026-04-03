@@ -5,10 +5,10 @@ import "../../contracts/VerifierBase.sol";
 import "../../contracts/IDeal.sol";
 import "../../contracts/IERC20.sol";
 
-/// @title SettlementPriceVerifier - 欧式期权结算价验证者
-/// @notice 负责把到期结算价写入链上，并通过回调通知 DealContract。
-/// @dev 因 IDeal.onVerificationResult 只支持 int8 result，无法直接传数值价格，
-///      所以价格通过 settlementPriceOf(...) 这个 side-channel getter 提供给 DealContract 读取。
+/// @title SettlementPriceVerifier - European option settlement price verifier
+/// @notice Responsible for writing the expiry settlement price on-chain and notifying the DealContract via callback.
+/// @dev Since IDeal.onVerificationResult only supports int8 result, it cannot directly carry a numeric price.
+///      Therefore the price is provided via a side-channel getter settlementPriceOf(...) for the DealContract to read.
 contract SettlementPriceVerifier is VerifierBase {
 
     error PriceMustBePositive();

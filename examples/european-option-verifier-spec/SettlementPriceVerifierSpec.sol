@@ -3,11 +3,11 @@ pragma solidity ^0.8.20;
 
 import "../../contracts/VerifierSpec.sol";
 
-/// @title SettlementPriceVerifierSpec - 欧式期权结算价验证规范
-/// @notice 用于验证“某个 Verifier 是否同意为指定 underlying/quote/expiry 提供结算价格”。
-/// @dev SyncTx 的 onVerificationResult 只支持 int8 result，无法直接传输数值价格。
-///      因此本 Spec 只负责验证签名条款；实际价格由具体 Verifier 实例在链上存储，
-///      DealContract 在回调中读取 verifier.settlementPriceOf(...)。
+/// @title SettlementPriceVerifierSpec - European option settlement price verification spec
+/// @notice Verifies that a Verifier agrees to provide a settlement price for a given underlying/quote/expiry.
+/// @dev SyncTx's onVerificationResult only supports int8 result, which cannot directly carry a numeric price.
+///      Therefore this Spec only verifies signature terms; the actual price is stored on-chain by the
+///      specific Verifier instance, and the DealContract reads it via verifier.settlementPriceOf(...) in the callback.
 contract SettlementPriceVerifierSpec is VerifierSpec {
 
     bytes32 public constant VERIFY_TYPEHASH = keccak256(

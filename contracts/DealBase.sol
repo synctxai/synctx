@@ -3,22 +3,22 @@ pragma solidity ^0.8.20;
 
 import "./IDeal.sol";
 
-/// @title DealBase - 交易合约抽象基类
-/// @notice 实现 IDeal。子合约继承并覆盖所有抽象方法。
-/// @dev 刻意保持轻量 — 不定义 State 枚举、Deal 结构体或存储。
-///      不同类型的交易合约有截然不同的状态机和数据模型。
-///      安全原则：无 owner、无 admin、无 proxy、无 selfdestruct、无 delegatecall。
-///      信任来自代码透明度和审计，而非特权角色。
+/// @title DealBase - Abstract base for deal contracts
+/// @notice Implements IDeal. Subcontracts inherit and override all abstract methods.
+/// @dev Kept intentionally lightweight — no State enum, Deal struct, or storage.
+///      Different deal types have vastly different state machines and data models.
+///      SECURITY: No owner, no admin, no proxy, no selfdestruct, no delegatecall.
+///      Trust comes from code transparency and audit, not from privileged roles.
 abstract contract DealBase is IDeal {
 
-    // ===================== serviceMode 常量 =====================
+    // ===================== serviceMode Constants =====================
 
     uint8 constant MODE_TESTING = 0;
     uint8 constant MODE_OPENING = 1;
     uint8 constant MODE_CLOSED  = 2;
 
     // ===================== ERC165 =====================
-    // ERC-165 用于平台识别此合约是否实现了 IDeal 接口。
+    // ERC-165 is used by the platform to detect whether this contract implements the IDeal interface.
 
     bytes4 private constant _INTERFACE_ID =
         type(IDeal).interfaceId;
@@ -26,68 +26,68 @@ abstract contract DealBase is IDeal {
     /// @dev IERC165 interfaceId = bytes4(keccak256("supportsInterface(bytes4)"))
     bytes4 private constant _IERC165_ID = 0x01ffc9a7;
 
-    /// @dev 无 virtual → 子合约不可覆盖
-    /// @notice ERC165：查询此合约是否实现了指定接口
+    /// @dev No virtual → subcontracts cannot override
+    /// @notice ERC165: query if this contract implements a given interface
     function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
         return interfaceId == _INTERFACE_ID
             || interfaceId == _IERC165_ID;
     }
 
-    // ===================== 接口版本 =====================
+    // ===================== Interface Version =====================
 
-    /// @dev 无 virtual → 子合约不可覆盖
+    /// @dev No virtual → subcontracts cannot override
     function standard() external pure returns (uint8) {
         return 1;
     }
 
-    // ===================== Deal 索引计数器 =====================
+    // ===================== Deal Index Counter =====================
 
-    /// @dev 下一个 deal 的索引，由 _recordStart 自增
+    /// @dev Next deal index, auto-incremented by _recordStart
     uint256 private _nextDealIndex;
 
-    /// @dev 记录新交易创建
-    /// @param traders 参与交易的地址数组
-    /// @param verifiers 验证者地址数组（无验证则传空数组）
-    /// @return dealIndex 新交易的索引（自增前的值）
+    /// @dev Record a new deal start
+    /// @param traders Array of trader addresses involved
+    /// @param verifiers Array of verifier addresses (pass empty array if no verification)
+    /// @return dealIndex The new deal index (pre-increment value)
     function _recordStart(address[] memory traders, address[] memory verifiers) internal returns (uint256 dealIndex) {
         dealIndex = _nextDealIndex++;
         emit DealCreated(dealIndex, traders, verifiers);
     }
 
-    /// @dev 发出 Phase 变更事件
-    /// @param dealIndex 交易索引
-    /// @param toPhase 目标 phase：2=Active, 3=Success, 4=Failed, 5=Cancelled
+    /// @dev Emit phase change event
+    /// @param dealIndex The deal index
+    /// @param toPhase Target phase: 2=Active, 3=Success, 4=Failed, 5=Cancelled
     function _emitPhaseChanged(uint256 dealIndex, uint8 toPhase) internal {
         emit DealPhaseChanged(dealIndex, toPhase);
     }
 
-    /// @dev 发出状态变更通知
+    /// @dev Emit status change notification
     function _emitStatusChanged(uint256 dealIndex, uint8 statusIndex) internal {
         emit DealStatusChanged(dealIndex, statusIndex);
     }
 
-    /// @dev 发出违约标记
+    /// @dev Emit violator marker
     function _emitViolated(uint256 dealIndex, address violator, string memory reason) internal {
         emit DealViolated(dealIndex, violator, reason);
     }
 
-    /// @dev 发出合约营业状态变更事件
+    /// @dev Emit service mode change event
     function _emitServiceModeChanged(uint8 mode) internal {
         emit ServiceModeChanged(mode);
     }
 
-    // ===================== serviceMode 默认实现 =====================
-    // 大多数合约永久 OPENING，直接继承即可。
-    // 需要 TESTING 状态机的合约（如 EuropeanOption）自行 override。
+    // ===================== serviceMode Default Implementation =====================
+    // Most contracts are permanently OPENING; just inherit as-is.
+    // Contracts that need a TESTING state machine (e.g. EuropeanOption) override on their own.
 
-    /// @dev 默认返回 OPENING — 子合约可覆盖
+    /// @dev Default returns OPENING — subcontracts may override
     function serviceMode() external view virtual returns (uint8) {
         return MODE_OPENING;
     }
 
-    // ===================== 抽象方法 =====================
-    // 子合约必须覆盖以下所有方法。
-    // onVerificationResult 默认 revert — 不使用验证的合约无需覆盖。
+    // ===================== Abstract Methods =====================
+    // Subcontracts must override all methods below.
+    // onVerificationResult defaults to revert — contracts that don't use verification need not override.
 
     function name() external pure virtual returns (string memory);
 
@@ -120,7 +120,7 @@ abstract contract DealBase is IDeal {
 
     function requestVerification(uint256 dealIndex, uint256 verificationIndex) external virtual;
 
-    /// @dev 子合约必须覆盖以处理验证结果。默认 revert，不使用验证的合约无需覆盖。
+    /// @dev Must be overridden in subclass to handle verification results. Defaults to revert; contracts that don't use verification need not override.
     function onVerificationResult(uint256, uint256, int8, string calldata) external virtual {
         revert("not implemented");
     }

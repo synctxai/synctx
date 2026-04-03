@@ -10,20 +10,20 @@ import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 
 
-/// @title XQuoteDealContract - X 引用推文交易合约
-/// @notice 单合约管理所有交易。feeToken 通过 setFeeToken() 一次性设置（跨链统一地址）。
-/// @dev USDC approve · 紧凑存储 · 自定义错误 · 直接支付
-///      统一 dealStatus — status 字段直接存储 dealStatus 基础值，无内部 State 枚举
+/// @title XQuoteDealContract - X Quote Tweet Deal Contract
+/// @notice Single contract managing all deals. feeToken set via setFeeToken() once (cross-chain unified address).
+/// @dev USDC approve · Packed storage · Custom errors · Direct payout
+///      Unified dealStatus — status field stores dealStatus base value directly, no internal State enum
 ///
-///      交易流程概览：
-///      1. A 创建交易，存入 USDC（reward + protocolFee），指定 B 和 Verifier
-///      2. B 接受交易（protocolFee 此时支付给 FeeCollector）
-///      3. B 在 X 上引用推文，然后调用 claimDone 提交 quote_tweet_id
-///      4. A 手动确认付款，或请求 Verifier 自动验证
-///      5. 如果验证不确定或 Verifier 超时，进入协商阶段
+///      Deal flow overview:
+///      1. A creates deal, deposits USDC (reward + protocolFee), specifying B and Verifier
+///      2. B accepts deal (protocolFee sent to FeeCollector at this point)
+///      3. B quotes the tweet on X, then calls claimDone to submit quote_tweet_id
+///      4. A manually confirms payment, or requests Verifier auto-verification
+///      5. If verification is inconclusive or Verifier times out, enters settlement phase
 contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal", "1") {
 
-    // ===================== 错误 =====================
+    // ===================== Errors =====================
 
     error NotPartyA();
     error NotPartyB();
@@ -52,21 +52,21 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     error FeeTokenNotSet();
     error VersionMismatch();
 
-    // ===================== dealStatus 常量 =====================
-    // 基础值（可写入存储）和派生值（仅由 dealStatus() 运行时计算）。
+    // ===================== dealStatus Constants =====================
+    // Base values (written to storage) and derived values (computed at runtime by dealStatus() only).
     //
-    //   存储基础值          dealStatus 派生值
-    //   ─────────────       ──────────────────
-    //   WAITING_ACCEPT (0)  → ACCEPT_TIMED_OUT (1)
-    //   WAITING_CLAIM  (2)  → CLAIM_TIMED_OUT (3)
-    //   WAITING_CONFIRM(4)  → CONFIRM_TIMED_OUT (5)
-    //   VERIFYING      (6)  → VERIFIER_TIMED_OUT (7)
-    //   SETTLING       (8)  → SETTLEMENT_PROPOSED (9), SETTLEMENT_TIMED_OUT (10)
+    //   Storage base value      dealStatus derived value
+    //   ─────────────           ──────────────────
+    //   WAITING_ACCEPT (0)      → ACCEPT_TIMED_OUT (1)
+    //   WAITING_CLAIM  (2)      → CLAIM_TIMED_OUT (3)
+    //   WAITING_CONFIRM(4)      → CONFIRM_TIMED_OUT (5)
+    //   VERIFYING      (6)      → VERIFIER_TIMED_OUT (7)
+    //   SETTLING       (8)      → SETTLEMENT_PROPOSED (9), SETTLEMENT_TIMED_OUT (10)
     //   COMPLETED     (11)
     //   VIOLATED      (12)
     //   CANCELLED     (13)
     //   FORFEITED     (14)
-    //   NOT_FOUND    (255)  — deal 不存在
+    //   NOT_FOUND    (255)      — deal does not exist
 
     uint8 constant WAITING_ACCEPT       = 0;
     uint8 constant ACCEPT_TIMED_OUT     = 1;
@@ -85,42 +85,42 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     uint8 constant FORFEITED            = 14;
     uint8 constant NOT_FOUND            = 255;
 
-    // ===================== 类型 =====================
+    // ===================== Types =====================
 
-    /// @dev 紧凑存储到最少的存储槽。
-    ///      单验证槽位特化（requiredSpecs().length == 1）。
+    /// @dev Packed into minimal storage slots.
+    ///      Single-verification specialization (requiredSpecs().length == 1).
     struct Deal {
-        // 槽 1（28/32 字节）
-        address partyA;                   // 20 字节 — A 方地址（发起者/付款方）
-        uint48  stageTimestamp;           // 6 字节  — 当前阶段开始时间
-        uint8   status;                   // 1 字节  — dealStatus 基础值
-        bool    isRequesterA;             // 1 字节  — 验证请求方是否为 A（用于超时退费）
-        // 槽 2
-        address partyB;                   // 20 字节 — B 方地址（执行者/引用者）
-        uint96  amount;                   // 12 字节 — 托管金额（grossAmount - protocolFee）
-        // 槽 3 — Verifier 信息（槽位 0）
-        address verifier;                 // 20 字节 — Verifier 合约地址
-        uint96  verifierFee;              // 12 字节 — 验证费用
-        // 槽 4（26/32 字节 — violator 和 verificationTimestamp 互斥使用）
-        address violator;                 // 20 字节 — 违约方地址
-        uint48  verificationTimestamp;    // 6 字节  — 验证请求的时间戳
-        // 槽 5 — 签名截止时间（槽位 0）
+        // Slot 1 (28/32 bytes)
+        address partyA;                   // 20 bytes — Party A address (initiator/payer)
+        uint48  stageTimestamp;           // 6 bytes  — Current stage start time
+        uint8   status;                   // 1 byte   — dealStatus base value
+        bool    isRequesterA;             // 1 byte   — Whether verification requester is A (for timeout refund)
+        // Slot 2
+        address partyB;                   // 20 bytes — Party B address (executor/quoter)
+        uint96  amount;                   // 12 bytes — Escrowed amount (grossAmount - protocolFee)
+        // Slot 3 — Verifier info (slot 0)
+        address verifier;                 // 20 bytes — Verifier contract address
+        uint96  verifierFee;              // 12 bytes — Verification fee
+        // Slot 4 (26/32 bytes — violator and verificationTimestamp are mutually exclusive)
+        address violator;                 // 20 bytes — Violator address
+        uint48  verificationTimestamp;    // 6 bytes  — Verification request timestamp
+        // Slot 5 — Signature deadline (slot 0)
         uint256 signatureDeadline;
-        // 动态类型（各占独立的存储槽）
-        string  tweet_id;                 // 要被引用的推文 ID
-        uint64  quoter_user_id;           // 绑定的 X/Twitter immutable user_id
-        string  quote_tweet_id;           // B 的引用推文 ID，由 claimDone 设置
-        bytes   verifierSignature;        // EIP-712 签名（槽位 0，65 字节）
+        // Dynamic types (each occupies independent storage slots)
+        string  tweet_id;                 // Tweet ID to be quoted
+        uint64  quoter_user_id;           // Bound X/Twitter immutable user_id
+        string  quote_tweet_id;           // B's quote tweet ID, set by claimDone
+        bytes   verifierSignature;        // EIP-712 signature (slot 0, 65 bytes)
     }
 
-    /// @dev 协商提案，仅在 Settling 状态使用
+    /// @dev Settlement proposal, only used in Settling state
     struct Settlement {
-        address proposer;     // 20 字节 — 提案方
-        uint96  amountToA;    // 12 字节 — 提议给 A 的金额（剩余归 B）
-        uint256 version;      // 提案版本号，每次提案 +1
+        address proposer;     // 20 bytes — Proposer
+        uint96  amountToA;    // 12 bytes — Proposed amount for A (remainder goes to B)
+        uint256 version;      // Proposal version, incremented on each proposal
     }
 
-    // ===================== 常量 =====================
+    // ===================== Constants =====================
 
     uint96 public constant MIN_PROTOCOL_FEE = 10_000;
     uint256 public constant STAGE_TIMEOUT = 30 minutes;
@@ -133,7 +133,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     address public immutable REQUIRED_SPEC;
     BindingAttestation public immutable BINDING_ATTESTATION;
 
-    // ===================== 存储 =====================
+    // ===================== Storage =====================
 
     uint256 private _lock = 1;
 
@@ -141,7 +141,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     mapping(uint256 => Settlement) internal settlementByA;
     mapping(uint256 => Settlement) internal settlementByB;
 
-    // ===================== BySig TYPEHASH 常量 =====================
+    // ===================== BySig TYPEHASH Constants =====================
 
     bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
         "CreateDealBySig(address partyB,uint96 grossAmount,address verifier,"
@@ -180,7 +180,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         "address signer,address relayer,uint256 nonce,uint256 deadline)"
     );
 
-    // ===================== 修饰器 =====================
+    // ===================== Modifiers =====================
 
     modifier onlyA(uint256 dealIndex) {
         if (msg.sender != deals[dealIndex].partyA) revert NotPartyA();
@@ -214,7 +214,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _lock = 1;
     }
 
-    // ===================== 构造函数 =====================
+    // ===================== Constructor =====================
 
     constructor(address feeCollector, uint96 protocolFee_, address requiredSpec, address bindingAttestation) {
         _setInitializer();
@@ -230,11 +230,11 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         BINDING_ATTESTATION = BindingAttestation(bindingAttestation);
     }
 
-    // ===================== 创建交易 =====================
+    // ===================== Create Deal =====================
 
-    /// @notice 创建交易（需要预先 approve USDC）
-    /// @param quoterUserId B 的 Twitter immutable user_id
-    /// @param bindingSig Platform 签发的 B 的绑定证明签名
+    /// @notice Create a deal (requires pre-approved USDC)
+    /// @param quoterUserId B's Twitter immutable user_id
+    /// @param bindingSig Platform-issued binding attestation signature for B
     function createDeal(
         address partyB,
         uint96  grossAmount,
@@ -249,7 +249,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         return _createDealCore(msg.sender, partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoterUserId, bindingSig);
     }
 
-    /// @notice 创建交易（gasless BySig 版本）
+    /// @notice Create deal (gasless BySig version)
     function createDealBySig(
         address partyB,
         uint96  grossAmount,
@@ -287,7 +287,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         uint64  quoterUserId,
         bytes calldata bindingSig
     ) internal returns (uint256 dealIndex) {
-        // --- 参数校验 ---
+        // --- Validation ---
         if (feeToken == address(0)) revert FeeTokenNotSet();
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
         if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
@@ -302,15 +302,15 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
 
         if (bytes(tweet_id).length == 0) revert InvalidParams();
 
-        // 验证 B 的 Binding Attestation
+        // Verify B's Binding Attestation
         if (!BINDING_ATTESTATION.verify(partyB, quoterUserId, bindingSig)) revert InvalidBindingSignature();
 
         _verifyVerifierSignature(verifier, tweet_id, quoterUserId, verifierFee, deadline, sig);
 
-        // --- USDC 转入托管 ---
+        // --- Transfer USDC to escrow ---
         if (!IERC20(feeToken).transferFrom(sender, address(this), grossAmount)) revert TransferFailed();
 
-        // --- 创建交易记录 ---
+        // --- Create deal record ---
         {
             address[] memory traders = new address[](2);
             traders[0] = sender;
@@ -338,9 +338,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _emitStatusChanged(dealIndex, WAITING_ACCEPT);
     }
 
-    // ===================== 核心流程 =====================
+    // ===================== Core Flow =====================
 
-    /// @notice B 接受交易
+    /// @notice B accepts the deal
     function accept(uint256 dealIndex)
         external
         nonReentrant
@@ -348,7 +348,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _acceptCore(msg.sender, dealIndex);
     }
 
-    /// @notice B 接受交易（gasless BySig 版本）
+    /// @notice B accepts the deal (gasless BySig version)
     function acceptBySig(uint256 dealIndex, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -378,7 +378,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (!IERC20(feeToken).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
     }
 
-    /// @notice B 声称已完成引用推文，提交 quote_tweet_id
+    /// @notice B declares the quote is done, submits quote_tweet_id
     function claimDone(uint256 dealIndex, string calldata quote_tweet_id)
         external
         nonReentrant
@@ -386,7 +386,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _claimDoneCore(msg.sender, dealIndex, quote_tweet_id);
     }
 
-    /// @notice B 声称已完成引用推文（gasless BySig 版本）
+    /// @notice B declares the quote is done (gasless BySig version)
     function claimDoneBySig(uint256 dealIndex, string calldata quote_tweet_id, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -416,7 +416,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _emitStatusChanged(dealIndex, WAITING_CONFIRM);
     }
 
-    /// @notice A 手动确认并直接付款给 B（跳过验证）
+    /// @notice A manually confirms and pays B directly (skipping verification)
     function confirmAndPay(uint256 dealIndex)
         external
         nonReentrant
@@ -424,7 +424,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _confirmAndPayCore(msg.sender, dealIndex);
     }
 
-    /// @notice A 手动确认并直接付款给 B（gasless BySig 版本）
+    /// @notice A manually confirms and pays B (gasless BySig version)
     function confirmAndPayBySig(uint256 dealIndex, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -454,9 +454,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
     }
 
-    // ===================== 取消（WAITING_ACCEPT → CANCELLED） =====================
+    // ===================== Cancel (WAITING_ACCEPT → CANCELLED) =====================
 
-    /// @notice A 取消 B 尚未接受的交易（WAITING_ACCEPT + 已超时）
+    /// @notice A cancels a deal that B has not yet accepted (WAITING_ACCEPT + timed out)
     function cancelDeal(uint256 dealIndex)
         external
         nonReentrant
@@ -478,9 +478,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         }
     }
 
-    // ===================== 验证 =====================
+    // ===================== Verification =====================
 
-    /// @notice Trader 触发验证（调用者通过 approve 支付验证费）
+    /// @notice Trader triggers verification (caller pays fee via approve)
     function requestVerification(uint256 dealIndex, uint256 verificationIndex)
         external
         nonReentrant
@@ -489,7 +489,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _requestVerificationCore(msg.sender, dealIndex, verificationIndex);
     }
 
-    /// @notice Trader 触发验证（gasless BySig 版本）
+    /// @notice Trader triggers verification (gasless BySig version)
     function requestVerificationBySig(uint256 dealIndex, uint256 verificationIndex, PermitData calldata permit, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -515,7 +515,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         uint96 fee = d.verifierFee;
         address verifier = d.verifier;
 
-        // CEI：先改状态
+        // CEI: state changes first
         d.status = VERIFYING;
         d.isRequesterA = (sender == d.partyA);
         d.verificationTimestamp = uint48(block.timestamp);
@@ -525,10 +525,10 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (!IERC20(feeToken).transferFrom(sender, address(this), fee)) revert TransferFailed();
     }
 
-    /// @notice Verifier 提交验证结果
-    /// @dev result > 0 → 通过，付款给 B
-    ///      result < 0 → 失败，B 违约
-    ///      result == 0 → 不确定，进入协商
+    /// @notice Verifier submits verification result
+    /// @dev result > 0 → passed, pay B
+    ///      result < 0 → failed, B violated
+    ///      result == 0 → inconclusive, enter settlement
     function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason) external nonReentrant override onlySlot0(verificationIndex) {
         Deal storage d = deals[dealIndex];
 
@@ -536,7 +536,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (d.status != VERIFYING) revert InvalidStatus();
         if (block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) revert AlreadyTimedOut();
 
-        // 清除验证时间戳
+        // Clear verification timestamp
         d.verificationTimestamp = 0;
 
         uint96 vFee = d.verifierFee;
@@ -554,7 +554,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             d.stageTimestamp = uint48(block.timestamp);
         }
 
-        // --- 事件 ---
+        // --- Events ---
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
         if (result > 0) {
@@ -568,10 +568,10 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             _emitStatusChanged(dealIndex, SETTLING);
         }
 
-        // --- 交互：所有转账最后执行 ---
+        // --- Interactions: all transfers last ---
         if (vFee > 0) {
             if (result == 0) {
-                // inconclusive — 验证者未完成工作，退还 verifierFee 给请求方
+                // inconclusive — verifier did not complete work, refund verifierFee to requester
                 address requester = d.isRequesterA ? d.partyA : d.partyB;
                 if (!IERC20(feeToken).transfer(requester, vFee)) revert TransferFailed();
             } else {
@@ -583,9 +583,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         }
     }
 
-    // ===================== 验证重置 =====================
+    // ===================== Verification Reset =====================
 
-    /// @notice Verifier 超时后重置验证，退还验证费，进入协商
+    /// @notice Reset verification after verifier timeout, refund verification fee, enter settlement
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
         external
         nonReentrant
@@ -601,7 +601,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         address requester = d.isRequesterA ? d.partyA : d.partyB;
         uint96 vFee = d.verifierFee;
 
-        // CEI：先改状态
+        // CEI: state changes first
         d.verificationTimestamp = 0;
         d.status = SETTLING;
         d.stageTimestamp = uint48(block.timestamp);
@@ -614,11 +614,11 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         }
     }
 
-    // ===================== 协商 =====================
+    // ===================== Settlement =====================
 
-    /// @notice 提出协商方案：amountToA 是给 A 的金额（剩余归 B）
-    /// @dev 双提案模式：A/B 各自维护独立提案，互不覆盖。12h 后禁止新提案。
-    ///      每次提案版本号 +1，确认时需附带版本号防止前端运行覆盖。
+    /// @notice Propose a settlement: amountToA is the amount for A (remainder goes to B)
+    /// @dev Dual-proposal mode: A/B each maintain independent proposals, no overwriting. New proposals blocked after 12h.
+    ///      Version incremented on each proposal; expectedVersion required on confirm to prevent front-running.
     function proposeSettlement(uint256 dealIndex, uint96 amountToA)
         external
         nonReentrant
@@ -626,7 +626,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _proposeSettlementCore(msg.sender, dealIndex, amountToA);
     }
 
-    /// @notice 提出协商方案（gasless BySig 版本）
+    /// @notice Propose settlement (gasless BySig version)
     function proposeSettlementBySig(uint256 dealIndex, uint96 amountToA, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -665,9 +665,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         emit SettlementProposed(dealIndex, sender, amountToA, newVersion);
     }
 
-    /// @notice 确认对方的协商提案
-    /// @dev 12h 内正常确认；12h~13h grace period 内仍可确认已有提案（但不可提新案）；13h 后封锁。
-    /// @param expectedVersion 期望的提案版本号，防止前端运行覆盖
+    /// @notice Confirm counterparty's settlement proposal
+    /// @dev Within 12h: normal confirm; 12h~13h grace period: can still confirm existing proposals (but not create new ones); after 13h: locked.
+    /// @param expectedVersion Expected proposal version, prevents front-running
     function confirmSettlement(uint256 dealIndex, uint256 expectedVersion)
         external
         nonReentrant
@@ -675,7 +675,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _confirmSettlementCore(msg.sender, dealIndex, expectedVersion);
     }
 
-    /// @notice 确认对方的协商提案（gasless BySig 版本）
+    /// @notice Confirm counterparty's settlement proposal (gasless BySig version)
     function confirmSettlementBySig(uint256 dealIndex, uint256 expectedVersion, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -694,12 +694,12 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (d.status != SETTLING) revert InvalidStatus();
         if (sender != d.partyA && sender != d.partyB) revert NotAorB();
 
-        // 获取对方的提案
+        // Get counterparty's proposal
         Settlement storage stl = (sender == d.partyA) ? settlementByB[dealIndex] : settlementByA[dealIndex];
         if (stl.proposer == address(0)) revert InvalidSettlement();
         if (stl.version != expectedVersion) revert VersionMismatch();
 
-        // 超时检查：12h 内 OK；12h~13h grace OK；13h 后封锁
+        // Timeout check: within 12h OK; 12h~13h grace OK; after 13h locked
         uint256 graceDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT + CONFIRM_GRACE_PERIOD;
         if (block.timestamp > graceDeadline) revert AlreadyTimedOut();
 
@@ -722,8 +722,8 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         }
     }
 
-    /// @notice 协商超时，资金没收到 FeeCollector
-    /// @dev 有提案时需等 grace period (13h) 过后；无提案时 12h 后即可触发。
+    /// @notice Settlement timeout, funds seized to FeeCollector
+    /// @dev When proposals exist, must wait until grace period (13h) expires; when no proposals, triggers after 12h.
     function triggerSettlementTimeout(uint256 dealIndex)
         external
         nonReentrant
@@ -757,11 +757,11 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         }
     }
 
-    // ===================== 超时 =====================
+    // ===================== Timeout =====================
 
-    /// @notice 触发当前阶段的超时处理
-    /// @dev WAITING_CLAIM 超时：B 未 claimDone → B 违约
-    ///      WAITING_CONFIRM 超时：A 未确认 → 自动付款给 B
+    /// @notice Trigger timeout for current stage
+    /// @dev WAITING_CLAIM timeout: B didn't claimDone → B violated
+    ///      WAITING_CONFIRM timeout: A didn't confirm → auto-pay B
     function triggerTimeout(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
         if (!_isStageTimedOut(dealIndex)) revert NotTimedOut();
@@ -769,7 +769,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         uint8 s = d.status;
 
         if (s == WAITING_CLAIM) {
-            // B 未 claimDone → B 违约
+            // B didn't claimDone → B violated
             if (msg.sender != d.partyA) revert NotPartyA();
             d.status = VIOLATED;
             d.violator = d.partyB;
@@ -778,7 +778,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             _emitPhaseChanged(dealIndex, 4); // → Failed
 
         } else if (s == WAITING_CONFIRM) {
-            // A 未确认 → 自动付款给 B
+            // A didn't confirm → auto-pay B
             if (msg.sender != d.partyB) revert NotPartyB();
             uint96 amt = d.amount;
             d.amount = 0;
@@ -792,7 +792,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         }
     }
 
-    /// @notice 违约后提取资金
+    /// @notice Withdraw funds after violation
     function withdraw(uint256 dealIndex) external nonReentrant atStatus(dealIndex, VIOLATED) {
         Deal storage d = deals[dealIndex];
         address sender = msg.sender;
@@ -806,7 +806,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (!IERC20(feeToken).transfer(sender, amt)) revert TransferFailed();
     }
 
-    // ===================== 内部辅助函数 =====================
+    // ===================== Internal Helpers =====================
 
     function _verifyVerifierSignature(
         address verifier,
@@ -822,16 +822,16 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (recovered != IVerifier(verifier).signer()) revert InvalidVerifierSignature();
     }
 
-    /// @dev 检查当前阶段是否已超时（基于 stageTimestamp）
+    /// @dev Check if current stage has timed out (based on stageTimestamp)
     function _isStageTimedOut(uint256 dealIndex) internal view returns (bool) {
         Deal storage d = deals[dealIndex];
         uint256 timeout = d.status == SETTLING ? SETTLING_TIMEOUT : STAGE_TIMEOUT;
         return block.timestamp > uint256(d.stageTimestamp) + timeout;
     }
 
-    // ===================== 查询函数 =====================
+    // ===================== Query Functions =====================
 
-    /// @notice 获取当前阶段的剩余时间（秒）
+    /// @notice Get remaining time in current stage (seconds)
     function timeRemaining(uint256 dealIndex) external view returns (uint256) {
         Deal storage d = deals[dealIndex];
         uint256 deadline_;
@@ -848,14 +848,14 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         return deadline_ - block.timestamp;
     }
 
-    /// @notice 检查验证是否已超时
+    /// @notice Check if verification has timed out
     function isVerificationTimedOut(uint256 dealIndex) external view returns (bool) {
         Deal storage d = deals[dealIndex];
         if (d.status != VERIFYING) return false;
         return block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT;
     }
 
-    /// @notice 获取双方协商提案信息
+    /// @notice Get both parties' settlement proposal info
     function settlement(uint256 dealIndex) external view returns (
         uint96  proposalByA_amountToA,
         uint96  proposalByB_amountToA,
@@ -876,12 +876,12 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         );
     }
 
-    /// @notice 检查交易阶段是否已超时
+    /// @notice Check if deal stage has timed out
     function isTimedOut(uint256 dealIndex) external view returns (bool) {
         return _isStageTimedOut(dealIndex);
     }
 
-    // ===================== 标准身份标识 =====================
+    // ===================== Standard Identity =====================
 
     function name() external pure override returns (string memory) {
         return "X Quote Tweet Deal";
@@ -917,7 +917,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             "Query exact value via protocolFee().";
     }
 
-    // ===================== 验证查询 =====================
+    // ===================== Verification Query =====================
 
     function requiredSpecs() external view override returns (address[] memory) {
         address[] memory specs = new address[](1);
@@ -944,7 +944,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         return (d.verifier, uint256(d.verifierFee), d.signatureDeadline, d.verifierSignature, specParams);
     }
 
-    // ===================== 操作指南 =====================
+    // ===================== Instruction =====================
 
     function instruction() external view override returns (string memory) {
         return
@@ -1014,9 +1014,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             "The user signs, a relayer submits on-chain and pays gas.\n";
     }
 
-    // ===================== 状态查询 =====================
+    // ===================== Status Query =====================
 
-    /// @notice 平台级统一交易阶段
+    /// @notice Platform-level unified deal phase
     /// @dev 0=NotFound, 1=Pending, 2=Active, 3=Success, 4=Failed, 5=Cancelled
     function phase(uint256 dealIndex) external view override returns (uint8) {
         Deal storage d = deals[dealIndex];
@@ -1031,30 +1031,30 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         return 2; // Active（WAITING_CLAIM, WAITING_CONFIRM, VERIFYING, SETTLING）
     }
 
-    /// @notice 统一业务状态码 — 不依赖 msg.sender，任何人调用结果一致
-    /// @dev 存储的基础值叠加运行时条件（超时、是否有提案）派生出完整状态码 0-14, 255
+    /// @notice Unified business status code — independent of msg.sender, same result for any caller
+    /// @dev Storage base value combined with runtime conditions (timeout, proposals) derives full status codes 0-14, 255
     function dealStatus(uint256 dealIndex) external view override returns (uint8) {
         Deal storage d = deals[dealIndex];
         if (d.partyA == address(0)) return NOT_FOUND;
 
         uint8 s = d.status;
 
-        // WAITING_ACCEPT (0) → 可能超时 (1)
+        // WAITING_ACCEPT (0) → may time out (1)
         if (s == WAITING_ACCEPT) {
             return _isStageTimedOut(dealIndex) ? ACCEPT_TIMED_OUT : WAITING_ACCEPT;
         }
 
-        // WAITING_CLAIM (2) → 可能超时 (3)
+        // WAITING_CLAIM (2) → may time out (3)
         if (s == WAITING_CLAIM) {
             return _isStageTimedOut(dealIndex) ? CLAIM_TIMED_OUT : WAITING_CLAIM;
         }
 
-        // WAITING_CONFIRM (4) → 可能超时 (5)
+        // WAITING_CONFIRM (4) → may time out (5)
         if (s == WAITING_CONFIRM) {
             return _isStageTimedOut(dealIndex) ? CONFIRM_TIMED_OUT : WAITING_CONFIRM;
         }
 
-        // VERIFYING (6) → 可能 Verifier 超时 (7)
+        // VERIFYING (6) → may verifier time out (7)
         if (s == VERIFYING) {
             if (block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) {
                 return VERIFIER_TIMED_OUT;
@@ -1062,7 +1062,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             return VERIFYING;
         }
 
-        // SETTLING (8) → 可能有提案 (9) 或超时 (10)
+        // SETTLING (8) → may have proposal (9) or time out (10)
         if (s == SETTLING) {
             bool hasProposal = settlementByA[dealIndex].proposer != address(0)
                             || settlementByB[dealIndex].proposer != address(0);
@@ -1076,11 +1076,11 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             return SETTLING;
         }
 
-        // 终态：COMPLETED (11), VIOLATED (12), CANCELLED (13), FORFEITED (14)
+        // Terminal states: COMPLETED (11), VIOLATED (12), CANCELLED (13), FORFEITED (14)
         return s;
     }
 
-    /// @notice 指定索引的交易是否存在
+    /// @notice Whether a deal with the given index exists
     function dealExists(uint256 dealIndex) external view override returns (bool) {
         return deals[dealIndex].partyA != address(0);
     }

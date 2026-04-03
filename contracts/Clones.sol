@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title Clones - EIP-1167 最小代理部署
-/// @dev 轻量实现，与 OpenZeppelin Clones 等价。
+/// @title Clones - EIP-1167 minimal proxy deployment
+/// @dev Lightweight implementation, equivalent to OpenZeppelin Clones.
 library Clones {
     error CloneDeployFailed();
 
-    /// @notice 部署 implementation 的 EIP-1167 最小代理
-    /// @param implementation 实现合约地址
-    /// @return instance 新部署的代理地址
+    /// @notice Deploy an EIP-1167 minimal proxy of implementation
+    /// @param implementation The implementation contract address
+    /// @return instance The newly deployed proxy address
     function clone(address implementation) internal returns (address instance) {
         assembly {
             let ptr := mload(0x40)

@@ -9,12 +9,12 @@ import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 
 
-/// @title XFollowCampaign - X 付费关注 Campaign 子合约
-/// @notice 由 XFollowFactory 通过 EIP-1167 clone 创建。每个实例 = 一个 campaign。
-///         A 存入预算，任何通过 Binding Attestation 认证的用户可关注后领取固定奖励。
-///         每个 B 的 claim() 创建一个新的 dealIndex。全自动，无需协商。
-/// @dev 生命周期：OPEN → CLOSED
-///      无 constructor — 所有状态通过 initialize() 一次性设置（clone 兼容）。
+/// @title XFollowCampaign - X Paid Follow Campaign Sub-contract
+/// @notice Created by XFollowFactory via EIP-1167 clone. Each instance = one campaign.
+///         A deposits budget, any user authenticated via Binding Attestation can follow and claim a fixed reward.
+///         Each B's claim() creates a new dealIndex. Fully automated, no negotiation needed.
+/// @dev Lifecycle: OPEN → CLOSED
+///      No constructor — all state is set via initialize() in one call (clone compatible).
 contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
 
     /// @dev Lock implementation against initialize() — clones are unaffected.
@@ -22,7 +22,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         _initialized = true;
     }
 
-    // ===================== 错误 =====================
+    // ===================== Errors =====================
 
     error NotPartyA();
     error NotVerifier();
@@ -49,16 +49,16 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     error AlreadyInitialized();
     error Reentrancy();
 
-    // ===================== 事件 =====================
+    // ===================== Events =====================
 
-    /// @notice Verifier 超时事件，供平台索引 verifier 可靠性
+    /// @notice Verifier timeout event, for platform to index verifier reliability
     event VerifierTimeout(uint256 indexed dealIndex, address indexed verifier);
 
-    // ===================== dealStatus 常量（per-claim） =====================
+    // ===================== dealStatus Constants (per-claim) =====================
     //
-    //   存储基础值            dealStatus 派生值
-    //   ─────────────         ──────────────────
-    //   VERIFYING        (0)  → VERIFIER_TIMED_OUT (1)
+    //   Storage base value          dealStatus derived value
+    //   ─────────────               ──────────────────
+    //   VERIFYING        (0)        → VERIFIER_TIMED_OUT (1)
     //   COMPLETED        (2)
     //   REJECTED         (3)
     //   TIMED_OUT        (4)
@@ -73,31 +73,31 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     uint8 constant INCONCLUSIVE         = 5;
     uint8 constant NOT_FOUND            = 255;
 
-    // ===================== campaignStatus 常量 =====================
+    // ===================== campaignStatus Constants =====================
 
     uint8 constant OPEN                 = 1;
     uint8 constant CLOSED               = 2;
 
-    // ===================== 类型 =====================
+    // ===================== Types =====================
 
     struct Claim {
-        address claimer;             // B 的地址
-        uint48  timestamp;           // claim 创建时间
+        address claimer;             // B's address
+        uint48  timestamp;           // Claim creation time
         uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT / INCONCLUSIVE
-        uint64  follower_user_id;    // claim 时通过 Binding Attestation 验证
+        uint64  follower_user_id;    // Verified via Binding Attestation at claim time
     }
 
-    // ===================== 常量 =====================
+    // ===================== Constants =====================
 
     uint256 public constant VERIFICATION_TIMEOUT = 30 minutes;
     uint8 public constant MAX_FAILURES = 3;
 
-    // ===================== 初始化守卫 & 重入锁 =====================
+    // ===================== Initialization Guard & Reentrancy Lock =====================
 
     bool private _initialized;
     uint256 private _lock = 1;
 
-    // ===================== Config（由 factory 在 initialize 时传入） =====================
+    // ===================== Config (set by factory during initialize) =====================
 
     address public feeToken;
     address public feeCollector;
@@ -105,7 +105,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     address public requiredSpec;
     BindingAttestation public bindingAttestation;
 
-    // ===================== Campaign 存储 =====================
+    // ===================== Campaign Storage =====================
 
     address public partyA;
     uint8   public campaignStatus;       // OPEN / CLOSED
@@ -120,25 +120,25 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     uint64  public target_user_id;
     bytes   public verifierSignature;
 
-    /// @notice Verifier 超时次数（链上信用信号）
+    /// @notice Verifier timeout count (on-chain credit signal)
     uint32  public verifierTimeoutCount;
 
-    // ===================== Per-Claim 存储 =====================
+    // ===================== Per-Claim Storage =====================
 
     mapping(uint256 => Claim) internal claims;
     mapping(address => bool)  public claimedAddress;
-    mapping(uint64  => uint8) public claimedUserId;          // 0=未领取 1=验证中 2=已领取
+    mapping(uint64  => uint8) public claimedUserId;          // 0=unclaimed 1=verifying 2=claimed
     mapping(address => uint8) public failCount;
-    mapping(address => uint256) internal pendingClaimIndex;  // B → 当前 pending 的 dealIndex
+    mapping(address => uint256) internal pendingClaimIndex;  // B → current pending dealIndex
 
-    // ===================== BySig TYPEHASH 常量 =====================
+    // ===================== BySig TYPEHASH Constants =====================
 
     bytes32 private constant _CLAIM_TYPEHASH = keccak256(
         "ClaimBySig(uint64 userId,bytes32 bindingSigHash,"
         "address signer,address relayer,uint256 nonce,uint256 deadline)"
     );
 
-    // ===================== 修饰器 =====================
+    // ===================== Modifiers =====================
 
     modifier onlyA() {
         if (msg.sender != partyA) revert NotPartyA();
@@ -157,9 +157,9 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         _lock = 1;
     }
 
-    // ===================== 初始化（替代 constructor，clone 兼容） =====================
+    // ===================== Initialization (replaces constructor, clone compatible) =====================
 
-    /// @notice 由 XFollowFactory 在 clone 后原子调用，一次性初始化所有参数
+    /// @notice Called atomically by XFollowFactory after clone, initializes all parameters once
     function initialize(
         address feeToken_,
         address feeCollector_,
@@ -180,7 +180,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         _initialized = true;
         _lock = 1; // clone storage starts at 0; set to 1 for 1/2 reentrancy pattern
 
-        // MetaTxMixin 初始化（clone 路径）
+        // MetaTxMixin initialization (clone path)
         _initMetaTxDomain("XFollowCampaign", "1");
 
         // Config
@@ -190,7 +190,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         requiredSpec = requiredSpec_;
         bindingAttestation = BindingAttestation(bindingAttestation_);
 
-        // Campaign 参数验证
+        // Campaign parameter validation
         if (rewardPerFollow_ == 0) revert InvalidParams();
         if (deadline_ <= block.timestamp) revert InvalidParams();
         if (verifier_ == address(0)) revert InvalidParams();
@@ -201,10 +201,10 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (grossAmount_ < rewardPerFollow_ + verifierFee_ + protocolFee_) revert InsufficientBudget();
         if (target_user_id_ == 0) revert InvalidParams();
 
-        // 验证 Verifier 签名
+        // Verify Verifier signature
         _verifyVerifierSignature(verifier_, target_user_id_, verifierFee_, sigDeadline_, sig_);
 
-        // 设置 campaign（USDC 已由 factory transferFrom 到本合约）
+        // Set up campaign (USDC already transferFrom'd by factory to this contract)
         partyA = partyA_;
         campaignStatus = OPEN;
         verifier = verifier_;
@@ -217,18 +217,18 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         verifierSignature = sig_;
     }
 
-    // ===================== Claim（每个 claim = 一个 dealIndex） =====================
+    // ===================== Claim (each claim = one dealIndex) =====================
 
-    /// @notice B 领取关注奖励。提交 Binding Attestation 证明身份。
-    ///         claimedUserId 状态：0=可领取，1=验证中（锁定），2=已成功领取（永久锁定）。
-    ///         验证失败/inconclusive 自动回退为 0；超时需先调 resetVerification() 回退后方可重试。
-    /// @param userId B 的 Twitter immutable user_id
-    /// @param bindingSig Platform 签发的绑定证明签名
+    /// @notice B claims follow reward. Submits Binding Attestation to prove identity.
+    ///         claimedUserId states: 0=claimable, 1=verifying (locked), 2=successfully claimed (permanently locked).
+    ///         Failed/inconclusive auto-resets to 0; timeout requires calling resetVerification() first before retry.
+    /// @param userId B's Twitter immutable user_id
+    /// @param bindingSig Platform-issued binding attestation signature
     function claim(uint64 userId, bytes calldata bindingSig) external nonReentrant returns (uint256 dealIndex) {
         return _claimCore(msg.sender, userId, bindingSig);
     }
 
-    /// @notice B 领取关注奖励（gasless BySig 版本）
+    /// @notice B claims follow reward (gasless BySig version)
     function claimBySig(uint64 userId, bytes calldata bindingSig, MetaTxProof calldata proof)
         external nonReentrant returns (uint256 dealIndex)
     {
@@ -242,7 +242,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     }
 
     function _claimCore(address sender, uint64 userId, bytes calldata bindingSig) internal returns (uint256 dealIndex) {
-        // 检查并可能触发 auto-close
+        // Check and possibly trigger auto-close
         _checkAndClose();
         if (campaignStatus != OPEN) revert CampaignNotOpen();
 
@@ -250,26 +250,26 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (claimedUserId[userId] != 0) revert AlreadyClaimed();
         if (failCount[sender] >= MAX_FAILURES) revert MaxFailures();
 
-        // 检查是否有 pending claim
+        // Check for pending claim
         if (_hasPendingClaim(sender)) revert PendingClaim();
 
-        // 验证 Binding Attestation
+        // Verify Binding Attestation
         if (!bindingAttestation.verify(sender, userId, bindingSig)) revert InvalidBindingSignature();
         uint64 followerUserId = userId;
 
         uint96 cost = _claimCost();
         if (budget < cost) {
-            // 预算不足，auto-close
+            // Budget exhausted, auto-close
             if (pendingClaims == 0) {
                 campaignStatus = CLOSED;
             }
             revert BudgetExhausted();
         }
 
-        // 锁定费用
+        // Lock fees
         budget -= cost;
 
-        // 创建 claim（= dealIndex）
+        // Create claim (= dealIndex)
         {
             address[] memory traders = new address[](1);
             traders[0] = sender;
@@ -294,9 +294,9 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         emit VerificationRequested(dealIndex, 0, verifier);
     }
 
-    // ===================== 验证结果回调 =====================
+    // ===================== Verification Result Callback =====================
 
-    /// @notice Verifier 提交验证结果
+    /// @notice Verifier submits verification result
     function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata /* reason */)
         external override onlySlot0(verificationIndex) nonReentrant
     {
@@ -316,7 +316,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
         if (result > 0) {
-            // 通过：付款给 B
+            // Passed: pay B
             c.status = COMPLETED;
             claimedAddress[claimer] = true;
             claimedUserId[c.follower_user_id] = 2;
@@ -332,7 +332,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             if (!IERC20(feeToken).transfer(feeCollector, pFee)) revert TransferFailed();
 
         } else if (result < 0) {
-            // 失败：reward + protocolFee 退回预算，仅 verifierFee 付出，B 违约
+            // Failed: reward + protocolFee refunded to budget, only verifierFee paid out, B violated
             c.status = REJECTED;
             failCount[claimer]++;
             claimedUserId[c.follower_user_id] = 0;
@@ -347,7 +347,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             }
 
         } else {
-            // 不确定：全额退回预算，不扣费
+            // Inconclusive: full refund to budget, no fees deducted
             c.status = INCONCLUSIVE;
             claimedUserId[c.follower_user_id] = 0;
             budget += reward + vFee + pFee;
@@ -356,16 +356,16 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             _emitPhaseChanged(dealIndex, 4); // → Failed
         }
 
-        // 检查是否应 auto-close
+        // Check if should auto-close
         _checkAndClose();
     }
 
-    // ===================== 验证超时重置 =====================
+    // ===================== Verification Timeout Reset =====================
 
-    /// @notice Verifier 超时后重置 claim，全额退回预算。
-    ///         任何人均可调用（permissionless cleanup）。
-    ///         重置后解锁 claimedUserId 和 pendingClaimIndex，B 可重新 claim()。
-    ///         验证失败(result<0) 和 inconclusive(result==0) 由 onVerificationResult 自动清理，无需手动 reset。
+    /// @notice Reset claim after verifier timeout, full refund to budget.
+    ///         Anyone can call (permissionless cleanup).
+    ///         After reset, claimedUserId and pendingClaimIndex are unlocked, B can re-claim().
+    ///         Failed (result<0) and inconclusive (result==0) are auto-cleaned by onVerificationResult, no manual reset needed.
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
         external onlySlot0(verificationIndex) nonReentrant
     {
@@ -388,15 +388,15 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         _checkAndClose();
     }
 
-    // ===================== Campaign 结束 =====================
+    // ===================== Campaign Closure =====================
 
-    /// @notice A 主动关闭 campaign，阻止新 claim，不影响已有 pending claims
+    /// @notice A manually closes campaign, prevents new claims, does not affect existing pending claims
     function closeCampaign() external onlyA {
         if (campaignStatus != OPEN) revert CampaignNotOpen();
         campaignStatus = CLOSED;
     }
 
-    /// @notice CLOSED 且无 pending 时，A 提取剩余预算
+    /// @notice When CLOSED and no pending claims, A withdraws remaining budget
     function withdrawRemaining() external onlyA nonReentrant {
         if (campaignStatus != CLOSED) revert NotClosed();
         if (pendingClaims > 0) revert PendingClaims();
@@ -407,7 +407,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (!IERC20(feeToken).transfer(partyA, amt)) revert TransferFailed();
     }
 
-    // ===================== 内部辅助函数 =====================
+    // ===================== Internal Helpers =====================
 
     function _claimCost() internal view returns (uint96) {
         return rewardPerFollow + verifierFee + protocolFee;
@@ -446,21 +446,21 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (recovered != IVerifier(verifier_).signer()) revert InvalidVerifierSignature();
     }
 
-    // ===================== 查询函数 =====================
+    // ===================== Query Functions =====================
 
-    /// @notice 每次 claim 的总成本
+    /// @notice Total cost per claim
     function claimCost() external view returns (uint96) {
         return _claimCost();
     }
 
-    /// @notice 剩余可 claim 次数
+    /// @notice Remaining claimable slots
     function remainingSlots() external view returns (uint256) {
         uint96 cost = _claimCost();
         if (cost == 0) return 0;
         return uint256(budget) / uint256(cost);
     }
 
-    /// @notice 指定地址 + userId 是否可 claim（含绑定检查）
+    /// @notice Whether a given address + userId can claim (including binding check)
     function canClaim(address addr, uint64 userId, bytes calldata bindingSig) external view returns (bool) {
         if (campaignStatus != OPEN) return false;
         if (block.timestamp > deadline) return false;
@@ -473,12 +473,12 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         return true;
     }
 
-    /// @notice 地址的失败次数
+    /// @notice Address failure count
     function failures(address addr) external view returns (uint8) {
         return failCount[addr];
     }
 
-    // ===================== IDeal 实现 =====================
+    // ===================== IDeal Implementation =====================
 
     function name() external pure override returns (string memory) {
         return "X(Twitter) Follow Campaign";
@@ -524,12 +524,12 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         return (verifier, uint256(verifierFee), signatureDeadline, verifierSignature, specParams);
     }
 
-    /// @notice claim() 内部自动触发验证，外部调用始终 revert
+    /// @notice claim() auto-triggers verification internally; external calls always revert
     function requestVerification(uint256, uint256) external pure override {
         revert("use claim() instead");
     }
 
-    /// @notice 平台级统一交易阶段（per-claim）
+    /// @notice Platform-level unified deal phase (per-claim)
     function phase(uint256 dealIndex) external view override returns (uint8) {
         Claim storage c = claims[dealIndex];
         if (c.claimer == address(0)) return 0; // NotFound
@@ -538,7 +538,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         return 4;                               // Failed (REJECTED / TIMED_OUT / INCONCLUSIVE)
     }
 
-    /// @notice 业务级状态码（per-claim，含派生状态）
+    /// @notice Business-level status code (per-claim, with derived states)
     function dealStatus(uint256 dealIndex) external view override returns (uint8) {
         Claim storage c = claims[dealIndex];
         if (c.claimer == address(0)) return NOT_FOUND;
@@ -556,7 +556,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         return claims[dealIndex].claimer != address(0);
     }
 
-    /// @notice 合约级营业状态：OPEN → OPENING，CLOSED → CLOSED
+    /// @notice Contract-level operating state: OPEN → OPENING, CLOSED → CLOSED
     function serviceMode() external view override returns (uint8) {
         return campaignStatus == OPEN ? MODE_OPENING : MODE_CLOSED;
     }

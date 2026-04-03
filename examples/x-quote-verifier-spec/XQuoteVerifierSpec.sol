@@ -3,23 +3,23 @@ pragma solidity ^0.8.20;
 
 import "./VerifierSpec.sol";
 
-/// @title XQuoteVerifierSpec - X 引用推文验证规范
-/// @notice X/Twitter 引用推文验证的业务规范合约。
-/// @dev 定义 check()，使用 EIP-712 签名验证。
-///      签名阶段参数（createDeal 时）：tweet_id(string), quoter_user_id(uint64)
-///      验证阶段参数（specParams）：abi.encode(tweet_id(string), quoter_user_id(uint64), quote_tweet_id(string))
-///        — quote_tweet_id 由 claimDone 写入，createDeal 时不可用
+/// @title XQuoteVerifierSpec - X Quote Tweet Verification Spec
+/// @notice Business specification contract for X/Twitter quote tweet verification.
+/// @dev Defines check() with EIP-712 signature verification.
+///      check signature params (createDeal phase): tweet_id(string), quoter_user_id(uint64)
+///      specParams (verification phase): abi.encode(tweet_id(string), quoter_user_id(uint64), quote_tweet_id(string))
+///        — quote_tweet_id is written by claimDone, not available at createDeal time
 contract XQuoteVerifierSpec is VerifierSpec {
 
-    // ============ 常量 ============
-    // EIP-712 结构体类型哈希，定义了签名时的字段名和类型。
-    // Verifier 签名时使用相同的 TYPEHASH 构造 structHash。
+    // ============ Constants ============
+    // EIP-712 struct type hash, defines the field names and types used during signing.
+    // Verifier uses the same TYPEHASH to construct structHash when signing.
 
     bytes32 public constant VERIFY_TYPEHASH = keccak256(
         "Verify(string tweetId,uint64 quoterUserId,uint256 fee,uint256 deadline)"
     );
 
-    // ============ VerifierSpec 元数据 ============
+    // ============ VerifierSpec Metadata ============
 
     /// @inheritdoc VerifierSpec
     function name() external pure override returns (string memory) {
@@ -40,18 +40,18 @@ contract XQuoteVerifierSpec is VerifierSpec {
             "specParams: abi.encode(tweet_id, quoter_user_id, quote_tweet_id).";
     }
 
-    // ============ 签名验证 ============
+    // ============ Signature Verification ============
 
-    /// @notice 恢复 X 引用推文 EIP-712 签名的签名者地址
-    /// @dev 构造 structHash，调用 _recoverEIP712Signer 恢复签名者。
-    ///      调用方负责比对返回地址与 verifier.signer()。
-    /// @param verifierInstance Verifier 合约地址（用于读取 DOMAIN_SEPARATOR）
-    /// @param tweet_id 要验证的推文 ID
-    /// @param quoter_user_id 引用者的 X/Twitter immutable user_id
-    /// @param fee 验证费用（USDC，6 位小数）
-    /// @param deadline 签名过期时间（Unix 秒）
-    /// @param sig EIP-712 签名
-    /// @return 签名者地址
+    /// @notice Recover the signer address from an X quote tweet EIP-712 signature
+    /// @dev Constructs structHash, calls _recoverEIP712Signer to recover the signer.
+    ///      Caller is responsible for comparing the returned address with verifier.signer().
+    /// @param verifierInstance Verifier contract address (for reading DOMAIN_SEPARATOR)
+    /// @param tweet_id The tweet ID to verify
+    /// @param quoter_user_id Quoter's X/Twitter immutable user_id
+    /// @param fee Verification fee (USDC, 6 decimals)
+    /// @param deadline Signature expiration timestamp (Unix seconds)
+    /// @param sig EIP-712 signature
+    /// @return Signer address
     function check(
         address verifierInstance,
         string calldata tweet_id,

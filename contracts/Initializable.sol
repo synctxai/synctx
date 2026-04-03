@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title Initializable - 一次性初始化支持
-/// @notice 跨链统一地址部署：链特定参数（feeToken）在部署后由 deployer 一次性设置。
-/// @dev deployer（constructor 的 msg.sender）为唯一 initializer。
-///      setFeeToken 调用后 initializer 自动清零，不再拥有任何权限。
+/// @title Initializable - One-time initialization support
+/// @notice Cross-chain unified address deployment: chain-specific params (feeToken) are set once by the deployer after deployment.
+/// @dev The deployer (msg.sender of the constructor) is the sole initializer.
+///      After setFeeToken is called, the initializer is cleared and no longer holds any privileges.
 abstract contract Initializable {
     error AlreadyInitialized();
     error NotInitializer();
@@ -12,13 +12,13 @@ abstract contract Initializable {
 
     event FeeTokenSet(address indexed feeToken);
 
-    /// @dev 部署者地址，setFeeToken 调用后清零
+    /// @dev Deployer address, cleared after setFeeToken is called
     address private _initializer;
 
-    /// @notice 费用代币地址（如 USDC）
+    /// @notice Fee token address (e.g. USDC)
     address public feeToken;
 
-    /// @dev 子合约 constructor 中调用，记录部署者为 initializer
+    /// @dev Called in subcontract constructor to record the deployer as initializer
     function _setInitializer() internal {
         _initializer = msg.sender;
     }
@@ -30,7 +30,7 @@ abstract contract Initializable {
         _initializer = address(0);
     }
 
-    /// @notice 设置费用代币地址（一次性，仅 deployer 可调用）
+    /// @notice Set the fee token address (one-time, deployer only)
     function setFeeToken(address feeToken_) external onlyInitializer {
         if (feeToken_ == address(0) || feeToken_.code.length == 0) revert FeeTokenInvalid();
         feeToken = feeToken_;

@@ -19,14 +19,14 @@ interface ISettlementPriceVerifierLike {
         returns (uint256);
 }
 
-/// @title EuropeanOptionDealContract - 欧式期权 V1 核心交易合约
-/// @notice V1 聚焦 pairwise explicit-consent 交易流，不在同一合约中实现公开 series/自动做市层。
-/// @dev 核心流程：
-///      1. Holder 创建 deal 并锁 premium
-///      2. Writer 接受 deal 并锁 collateral
-///      3. 到期后任一参与方可请求价格验证
-///      4. Verifier 提交 settlement price，合约按 option type 自动结算
-///      5. 若验证失败/不确定，则进入 Settling，由双方协商；超时则 unwind
+/// @title EuropeanOptionDealContract - European Option V1 Core Deal Contract
+/// @notice V1 focuses on pairwise explicit-consent deal flow; no public series/AMM layer in the same contract.
+/// @dev Core flow:
+///      1. Holder creates deal and locks premium
+///      2. Writer accepts deal and locks collateral
+///      3. After expiry, either party can request price verification
+///      4. Verifier submits settlement price, contract auto-settles based on option type
+///      5. If verification fails/inconclusive, enters Settling for manual negotiation; unwind on timeout
 contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("EuropeanOptionDeal", "1") {
 
     error FeeTokenNotSet();
@@ -84,10 +84,10 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
 
     address public immutable REQUIRED_SPEC;
 
-    // ===================== 合约生命周期 =====================
+    // ===================== Contract Lifecycle =====================
 
     uint8   private _serviceMode;      // MODE_TESTING → MODE_OPENING or MODE_CLOSED
-    address private _admin;            // deployer，goLive() 后永久清零
+    address private _admin;            // deployer, permanently cleared after goLive()
 
     uint256 private _lock = 1;
 
@@ -116,7 +116,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
     struct SettlementProposal {
         address proposer;
         uint256 amountToHolder; // denominated in collateral asset
-        uint256 version;        // 提案版本号，每次提案 +1
+        uint256 version;        // Proposal version, incremented on each proposal
     }
 
     struct CreateDealParams {
@@ -137,7 +137,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
     mapping(uint256 => Deal) internal deals;
     mapping(uint256 => SettlementProposal) internal settlements;
 
-    // ===================== BySig TYPEHASH 常量 =====================
+    // ===================== BySig TYPEHASH Constants =====================
 
     bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
         "CreateDealBySig(address writer,address underlying,uint8 optionType,"
@@ -167,7 +167,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         "address signer,address relayer,uint256 nonce,uint256 deadline)"
     );
 
-    // ===================== 修饰器 =====================
+    // ===================== Modifiers =====================
 
     modifier nonReentrant() {
         if (_lock == 2) revert Reentrancy();
@@ -186,17 +186,17 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         if (requiredSpec == address(0) || requiredSpec.code.length == 0) revert InvalidSpecAddress();
         REQUIRED_SPEC = requiredSpec;
         _admin = msg.sender;
-        // _serviceMode 默认 0 = MODE_TESTING
+        // _serviceMode defaults to 0 = MODE_TESTING
     }
 
-    // ===================== 合约生命周期管理 =====================
+    // ===================== Contract Lifecycle Management =====================
 
     modifier onlyAdmin() {
         if (msg.sender != _admin) revert NotAdmin();
         _;
     }
 
-    /// @notice TESTING → OPENING：冻结参数，永久销毁 admin 权限，不可逆
+    /// @notice TESTING → OPENING: freeze params, permanently destroy admin privileges, irreversible
     function goLive() external onlyAdmin {
         if (_serviceMode != MODE_TESTING) revert ContractAlreadyOpen();
         _serviceMode = MODE_OPENING;
@@ -204,7 +204,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         _emitServiceModeChanged(MODE_OPENING);
     }
 
-    /// @notice TESTING → CLOSED：测试不通过，废弃合约，不可逆
+    /// @notice TESTING → CLOSED: testing failed, discard contract, irreversible
     function closeDuringTesting() external onlyAdmin {
         if (_serviceMode != MODE_TESTING) revert ContractAlreadyOpen();
         _serviceMode = MODE_CLOSED;
@@ -222,7 +222,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         return _createDealCore(msg.sender, p);
     }
 
-    /// @notice 创建交易（gasless BySig 版本）
+    /// @notice Create deal (gasless BySig version)
     function createDealBySig(CreateDealParams calldata p, PermitData calldata permit, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -304,7 +304,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         _acceptCore(msg.sender, dealIndex);
     }
 
-    /// @notice Writer 接受交易（gasless BySig 版本）
+    /// @notice Writer accepts deal (gasless BySig version)
     function acceptBySig(uint256 dealIndex, PermitData calldata permit, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -367,7 +367,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         _requestVerificationCore(msg.sender, dealIndex, verificationIndex);
     }
 
-    /// @notice 请求验证（gasless BySig 版本）
+    /// @notice Request verification (gasless BySig version)
     function requestVerificationBySig(
         uint256 dealIndex,
         uint256 verificationIndex,
@@ -487,7 +487,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         _proposeSettlementCore(msg.sender, dealIndex, amountToHolder);
     }
 
-    /// @notice 提出协商方案（gasless BySig 版本）
+    /// @notice Propose settlement (gasless BySig version)
     function proposeSettlementBySig(uint256 dealIndex, uint256 amountToHolder, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -522,7 +522,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         _confirmSettlementCore(msg.sender, dealIndex, expectedVersion);
     }
 
-    /// @notice 确认对方的协商提案（gasless BySig 版本）
+    /// @notice Confirm counterparty's settlement proposal (gasless BySig version)
     function confirmSettlementBySig(uint256 dealIndex, uint256 expectedVersion, MetaTxProof calldata proof)
         external
         nonReentrant
@@ -585,7 +585,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         }
     }
 
-    // ===================== 内部结算逻辑 =====================
+    // ===================== Internal Settlement Logic =====================
 
     function _settleWithPrice(
         uint256 dealIndex,

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title GasSponsorVault - 第三方合约的 gas 赞助预充值金库
-/// @dev Admin 注册合约的 funder（防抢注），funder 自行充值/提取 ETH，
-///      Relayer 链下计算精确 gas 后批量扣费。
-///      资金与 Deal 托管资金完全隔离——Vault 是独立合约，持有独立 ETH 余额。
+/// @title GasSponsorVault - Gas sponsorship pre-funded vault for third-party contracts
+/// @dev Admin registers a contract's funder (prevents squatting), funder deposits/withdraws ETH,
+///      Relayer calculates exact gas off-chain then batch-deducts fees.
+///      Funds are completely isolated from Deal escrow — Vault is an independent contract with its own ETH balance.
 contract GasSponsorVault {
     error InsufficientBudget();
     error OnlyRelayer();
@@ -35,9 +35,9 @@ contract GasSponsorVault {
         _lock = 1;
     }
 
-    /// @dev 合约地址 => 剩余 ETH 预算 (wei)
+    /// @dev Contract address => remaining ETH budget (wei)
     mapping(address => uint256) public budgets;
-    /// @dev 合约地址 => funder 地址（admin 注册，有权充值/withdraw）
+    /// @dev Contract address => funder address (registered by admin, authorized to deposit/withdraw)
     mapping(address => address) public funderOf;
 
     modifier onlyAdmin() {
@@ -53,26 +53,26 @@ contract GasSponsorVault {
         admin = admin_;
     }
 
-    // ── Admin 操作 ──
+    // ── Admin Operations ──
 
-    /// @notice Admin 注册/变更合约的 funder
-    /// @dev 可重复调用以变更 funder；变更后旧 funder 失去充值/提取权
+    /// @notice Admin registers/changes a contract's funder
+    /// @dev Can be called multiple times to change funder; after change, the old funder loses deposit/withdraw rights
     function registerFunder(address dealContract, address funder) external onlyAdmin {
         if (dealContract == address(0) || funder == address(0)) revert ZeroAddress();
         funderOf[dealContract] = funder;
         emit FunderRegistered(dealContract, funder);
     }
 
-    /// @notice Admin 转让管理权
+    /// @notice Admin transfers admin rights
     function transferAdmin(address newAdmin) external onlyAdmin {
         if (newAdmin == address(0)) revert ZeroAddress();
         emit AdminTransferred(admin, newAdmin);
         admin = newAdmin;
     }
 
-    // ── Funder 操作 ──
+    // ── Funder Operations ──
 
-    /// @notice 为指定合约充值 ETH gas 赞助预算（必须先由 admin 注册）
+    /// @notice Deposit ETH gas sponsorship budget for a specific contract (must be registered by admin first)
     function fund(address dealContract) external payable nonReentrant {
         if (dealContract == address(0)) revert ZeroAddress();
         address f = funderOf[dealContract];
@@ -82,7 +82,7 @@ contract GasSponsorVault {
         emit Funded(dealContract, msg.sender, msg.value);
     }
 
-    /// @notice Funder 提取剩余预算
+    /// @notice Funder withdraws remaining budget
     function withdraw(address dealContract, uint256 amount) external nonReentrant {
         if (msg.sender != funderOf[dealContract]) revert OnlyFunder();
         if (budgets[dealContract] < amount) revert InsufficientBudget();
@@ -92,11 +92,11 @@ contract GasSponsorVault {
         emit Withdrawn(dealContract, msg.sender, amount);
     }
 
-    // ── Relayer 操作 ──
+    // ── Relayer Operations ──
 
-    /// @notice Relayer 批量扣费（攒一批 receipt 后一次性提交）
-    /// @param contracts 目标合约地址数组
-    /// @param costs 对应的精确 gas 费用数组 (wei)
+    /// @notice Relayer batch-deducts fees (accumulate receipts then submit in one call)
+    /// @param contracts Target contract address array
+    /// @param costs Corresponding exact gas cost array (wei)
     function deductBatch(
         address[] calldata contracts,
         uint256[] calldata costs
@@ -122,7 +122,7 @@ contract GasSponsorVault {
         emit BatchDeducted(total, contracts.length);
     }
 
-    /// @notice Relayer 单笔扣费
+    /// @notice Relayer single deduction
     function deduct(address dealContract, uint256 gasCost) external nonReentrant {
         if (msg.sender != RELAYER) revert OnlyRelayer();
         if (budgets[dealContract] < gasCost) revert InsufficientBudget();
@@ -134,7 +134,7 @@ contract GasSponsorVault {
 
     // ── View ──
 
-    /// @notice 查询合约的剩余 ETH 预算
+    /// @notice Query a contract's remaining ETH budget
     function budget(address dealContract) external view returns (uint256) {
         return budgets[dealContract];
     }

@@ -3,39 +3,39 @@ pragma solidity ^0.8.20;
 
 import "./VerifierBase.sol";
 
-/// @title XQuoteVerifier - X (Twitter) 引用推文验证者
-/// @notice 用于 X 引用推文验证的 Verifier 实例。
-/// @dev check() 在 XQuoteVerifierSpec 中，不在此处。
-///      此合约继承 VerifierBase（owner、DOMAIN_SEPARATOR、reportResult、withdrawFees），
-///      并通过 spec() 指向 XQuoteVerifierSpec。
+/// @title XQuoteVerifier - X (Twitter) quote tweet verifier
+/// @notice Verifier instance for X quote tweet verification.
+/// @dev check() lives in XQuoteVerifierSpec, not here.
+///      This contract inherits VerifierBase (owner, DOMAIN_SEPARATOR, reportResult, withdrawFees)
+///      and points to XQuoteVerifierSpec via spec().
 ///
-///      职责分工：
-///      - XQuoteVerifierSpec：定义 EIP-712 TYPEHASH，验证签名的有效性
-///      - XQuoteVerifier（本合约）：持有 owner、DOMAIN_SEPARATOR，提交验证结果，管理费用
-///      - 链下服务：监听 VerificationRequested 事件，调用 X API 执行实际验证，调用 reportResult
+///      Responsibilities:
+///      - XQuoteVerifierSpec: defines EIP-712 TYPEHASH, verifies signature validity
+///      - XQuoteVerifier (this contract): holds owner, DOMAIN_SEPARATOR, submits verification results, manages fees
+///      - Off-chain service: listens for VerificationRequested events, calls X API for actual verification, calls reportResult
 contract XQuoteVerifier is VerifierBase {
 
-    // ============ 常量 ============
+    // ============ Constants ============
 
-    /// @notice 签名时程序验证 deadline ≤ now + MAX_SIGN_DEADLINE_SECONDS
-    /// @dev 链上不额外校验 — createDeal 的签名验证已隐式保证 deadline 在此范围内。
-    ///      此常量为链下程序提供标准参数。
+    /// @notice Off-chain service validates deadline ≤ now + MAX_SIGN_DEADLINE_SECONDS during signing
+    /// @dev Not additionally checked on-chain — createDeal's signature verification implicitly ensures the deadline is within range.
+    ///      This constant provides a standard parameter for off-chain services.
     uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 3600;
 
-    // ============ 不可变量 ============
+    // ============ Immutables ============
 
-    /// @notice XQuoteVerifierSpec 合约地址
+    /// @notice XQuoteVerifierSpec contract address
     address public immutable SPEC;
 
-    // ============ 构造函数 ============
+    // ============ Constructor ============
 
-    /// @param specAddress 已部署的 XQuoteVerifierSpec 合约地址
+    /// @param specAddress The deployed XQuoteVerifierSpec contract address
     constructor(address specAddress) VerifierBase("XQuoteVerifier", "1") {
         require(specAddress != address(0), "spec cannot be zero");
         SPEC = specAddress;
     }
 
-    // ============ IVerifier 实现 ============
+    // ============ IVerifier Implementation ============
 
     /// @inheritdoc IVerifier
     function description() external pure override(VerifierBase) returns (string memory) {
