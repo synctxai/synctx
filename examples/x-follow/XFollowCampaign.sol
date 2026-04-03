@@ -197,7 +197,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (partyA_ == verifier_) revert InvalidParams();
         if (verifier_.code.length == 0) revert VerifierNotContract();
         if (sig_.length == 0) revert InvalidVerifierSignature();
-        if (sigDeadline_ < deadline_) revert SignatureExpired();
+        if (sigDeadline_ < uint256(deadline_) + VERIFICATION_TIMEOUT) revert SignatureExpired();
         if (grossAmount_ < rewardPerFollow_ + verifierFee_ + protocolFee_) revert InsufficientBudget();
         if (target_user_id_ == 0) revert InvalidParams();
 
