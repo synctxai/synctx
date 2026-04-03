@@ -344,9 +344,6 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     function accept(uint256 dealIndex)
         external
         nonReentrant
-        onlyB(dealIndex)
-        atStatus(dealIndex, WAITING_ACCEPT)
-        notTimedOut(dealIndex)
     {
         _acceptCore(msg.sender, dealIndex);
     }
@@ -384,9 +381,6 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     /// @notice B 声称已完成引用推文，提交 quote_tweet_id
     function claimDone(uint256 dealIndex, string calldata quote_tweet_id)
         external
-        onlyB(dealIndex)
-        atStatus(dealIndex, WAITING_CLAIM)
-        notTimedOut(dealIndex)
     {
         _claimDoneCore(msg.sender, dealIndex, quote_tweet_id);
     }
@@ -425,9 +419,6 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     function confirmAndPay(uint256 dealIndex)
         external
         nonReentrant
-        onlyA(dealIndex)
-        atStatus(dealIndex, WAITING_CONFIRM)
-        notTimedOut(dealIndex)
     {
         _confirmAndPayCore(msg.sender, dealIndex);
     }
@@ -492,8 +483,6 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         external
         nonReentrant
         override
-        atStatus(dealIndex, WAITING_CONFIRM)
-        onlySlot0(verificationIndex)
     {
         _requestVerificationCore(msg.sender, dealIndex, verificationIndex);
     }
@@ -630,7 +619,6 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     ///      每次提案版本号 +1，确认时需附带版本号防止前端运行覆盖。
     function proposeSettlement(uint256 dealIndex, uint96 amountToA)
         external
-        atStatus(dealIndex, SETTLING)
     {
         _proposeSettlementCore(msg.sender, dealIndex, amountToA);
     }
@@ -677,7 +665,6 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     function confirmSettlement(uint256 dealIndex, uint256 expectedVersion)
         external
         nonReentrant
-        atStatus(dealIndex, SETTLING)
     {
         _confirmSettlementCore(msg.sender, dealIndex, expectedVersion);
     }

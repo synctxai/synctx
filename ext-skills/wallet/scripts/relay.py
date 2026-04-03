@@ -243,6 +243,7 @@ def relay_bysig(
     permit_token: str | None = None,
     permit_amount: int = 0,
     deadline: int | None = None,
+    has_permit: bool = True,
 ) -> dict:
     """Gasless BySig meta-transaction: sign action-specific EIP-712 message + submit to relayer.
 
@@ -274,6 +275,11 @@ def relay_bysig(
         Amount to approve via permit (ignored if permit_token is None).
     deadline : int | None
         Unix timestamp deadline; defaults to now + 600 seconds (10 minutes).
+    has_permit : bool
+        Whether the BySig function takes a PermitData parameter before MetaTxProof.
+        True for createDealBySig, acceptBySig (EuropeanOption), requestVerificationBySig.
+        False for acceptBySig (XQuote), claimDoneBySig, confirmAndPayBySig,
+        proposeSettlementBySig, confirmSettlementBySig, claimBySig.
 
     Returns
     -------
@@ -322,12 +328,13 @@ def relay_bysig(
     signed = account.sign_message(encode_typed_data(full_message=typed_data))
     signature_bytes = signed.signature
 
-    # Build permit tuple
-    if permit_token:
-        permit = _sign_permit(permit_token, contract, permit_amount, chain_id, deadline)
-        permit_tuple = _build_permit_tuple(permit)
-    else:
-        permit_tuple = _build_zero_permit_tuple()
+    # Build permit tuple (only if function takes PermitData)
+    if has_permit:
+        if permit_token:
+            permit = _sign_permit(permit_token, contract, permit_amount, chain_id, deadline)
+            permit_tuple = _build_permit_tuple(permit)
+        else:
+            permit_tuple = _build_zero_permit_tuple()
 
     # Build proof tuple
     proof_tuple = _build_proof_tuple(
@@ -338,8 +345,11 @@ def relay_bysig(
         signature=signature_bytes,
     )
 
-    # Assemble full args: business args + permit tuple + proof tuple
-    full_args = list(business_args) + [permit_tuple, proof_tuple]
+    # Assemble full args
+    if has_permit:
+        full_args = list(business_args) + [permit_tuple, proof_tuple]
+    else:
+        full_args = list(business_args) + [proof_tuple]
 
     # Encode BySig calldata
     calldata = "0x" + _encode_calldata(bysig_sig, full_args).hex()
