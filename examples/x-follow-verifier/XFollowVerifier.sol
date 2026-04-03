@@ -41,7 +41,6 @@ contract XFollowVerifier is VerifierBase {
         return
             "Verify follow relationships on X (Twitter) for campaign model. "
             "Per-campaign signature (target_user_id + fee + deadline). "
-            "Dual-provider verification: twitterapi.io + twitter-api45. "
             "EIP-712 signed, max sign deadline 30 days.";
     }
 

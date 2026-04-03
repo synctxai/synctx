@@ -485,7 +485,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     }
 
     function description() external pure override returns (string memory) {
-        return "Campaign: pay fixed USDC reward per X follow. 1-to-many, auto-verified. Binding Attestation required.";
+        return "Pay fixed USDC reward per X (Twitter) follow. 1-to-many campaign, auto-verified. Binding Attestation required.";
     }
 
     function tags() external pure override returns (string[] memory) {
@@ -603,7 +603,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             "| 4 | TimedOut | Verification timed out and was reset. Budget refunded |\n"
             "| 5 | Inconclusive | API error. Budget fully refunded |\n"
             "| 255 | NotFound | Claim does not exist |\n\n"
-            "> **Timeout**: 30 minutes for verification. Use `timeRemaining(dealIndex)` to query remaining seconds.\n\n"
+            "> **Timeout**: 30 minutes for verification. Remaining time = `claims(dealIndex).timestamp + VERIFICATION_TIMEOUT - block.timestamp`.\n\n"
             "## Withdrawing Remaining Budget (A)\n\n"
             "1. Campaign must be CLOSED (auto on deadline/budget, or call `closeCampaign()`)\n"
             "2. If pending claims exist, wait for verification timeout (30 min), then call `resetVerification(dealIndex, 0)` for each\n"
