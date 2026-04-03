@@ -144,5 +144,5 @@ interface IDeal {
     );
 
     /// @notice 协商提案提交时发出
-    event SettlementProposed(uint256 indexed dealIndex, address indexed proposer, uint256 amountToA);
+    event SettlementProposed(uint256 indexed dealIndex, address indexed proposer, uint256 amountToA, uint256 settlementVersion);
 }

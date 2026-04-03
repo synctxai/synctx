@@ -27,9 +27,9 @@ contract SettlementPriceVerifier is VerifierBase {
 
     function description() external pure override(VerifierBase) returns (string memory) {
         return
-            "Verifier for European option settlement prices. "
-            "Signer reports a numeric settlement price on-chain, then triggers the deal callback. "
-            "Deal contracts must read settlementPriceOf(...) after a successful callback.";
+            "Verify settlement prices for European options. "
+            "Reports numeric price on-chain via settlementPriceOf(). "
+            "EIP-712 signed, max sign deadline 1 hour (3600s).";
     }
 
     function spec() external view override(VerifierBase) returns (address) {

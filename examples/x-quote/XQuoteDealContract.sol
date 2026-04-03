@@ -647,19 +647,22 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
         if (amountToA > d.amount) revert InvalidSettlement();
 
+        uint256 newVersion;
         if (sender == d.partyA) {
             Settlement storage s = settlementByA[dealIndex];
             s.proposer = sender;
             s.amountToA = amountToA;
             s.version += 1;
+            newVersion = s.version;
         } else {
             Settlement storage s = settlementByB[dealIndex];
             s.proposer = sender;
             s.amountToA = amountToA;
             s.version += 1;
+            newVersion = s.version;
         }
 
-        emit SettlementProposed(dealIndex, sender, amountToA);
+        emit SettlementProposed(dealIndex, sender, amountToA, newVersion);
     }
 
     /// @notice 确认对方的协商提案
@@ -857,7 +860,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         uint96  proposalByA_amountToA,
         uint96  proposalByB_amountToA,
         bool    hasProposalA,
-        bool    hasProposalB
+        bool    hasProposalB,
+        uint256 settlementVersionA,
+        uint256 settlementVersionB
     ) {
         Settlement storage stlA = settlementByA[dealIndex];
         Settlement storage stlB = settlementByB[dealIndex];
@@ -865,7 +870,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             stlA.amountToA,
             stlB.amountToA,
             stlA.proposer != address(0),
-            stlB.proposer != address(0)
+            stlB.proposer != address(0),
+            stlA.version,
+            stlB.version
         );
     }
 
@@ -881,13 +888,16 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     }
 
     function description() external pure override returns (string memory) {
-        return "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). Binding Attestation required. On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.";
+        return "Pay USDC to get a tweet quoted on X (Twitter). 2-party USDC settlement. Quoter requires Twitter binding.";
     }
 
     function tags() external pure override returns (string[] memory) {
-        string[] memory t = new string[](2);
+        string[] memory t = new string[](5);
         t[0] = "x";
         t[1] = "quote";
+        t[2] = "twitter";
+        t[3] = "kol";
+        t[4] = "tweet";
         return t;
     }
 
@@ -963,13 +973,14 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             "| sig | bytes | Verifier EIP-712 signature |\n"
             "| tweet_id | string | Tweet ID to be quoted |\n"
             "| quoterUserId | uint64 | B's Twitter immutable user_id |\n"
-            "| bindingSig | bytes | Platform binding attestation signature for B |\n\n"
+            "| bindingSig | bytes | B's Twitter binding signature (proves B's X account is bound to their wallet address) |\n\n"
             "**Prerequisites**:\n"
-            "1. B must have a Binding Attestation before createDeal()\n"
-            "2. Confirm B has not already quoted the target tweet, otherwise the deal is meaningless\n"
-            "3. Both parties have agreed on B's reward and tweet_id. A calls `protocolFee()` to get the protocol fee, grossAmount = reward + protocol fee\n"
-            "4. USDC `approve(contract address, reward + protocol fee + verification fee)`, i.e., grossAmount + verifierFee\n"
-            "5. Obtain verifier signature via `request_sign` (sig + fee)\n\n"
+            "1. B must complete Twitter binding before createDeal() -- bind their X account to their wallet address and obtain the binding signature via get-attestation\n"
+            "2. B must ensure they have NOT quoted the target tweet before the deal is created. If B has already quoted it, the verifier will reject the task and B will not receive the reward\n"
+            "3. A should maintain their own record of which quoters have already quoted the target tweet, to prevent the same quoter from creating duplicate deals for the same tweet\n"
+            "4. Both parties have agreed on B's reward and tweet_id. A calls `protocolFee()` to get the protocol fee, grossAmount = reward + protocol fee\n"
+            "5. USDC `approve(contract address, reward + protocol fee + verification fee)`, i.e., grossAmount + verifierFee\n"
+            "6. Obtain verifier signature via `request_sign` (sig + fee)\n\n"
             "> On creation, `grossAmount` is transferred to the contract in full; the protocol fee is only sent to `FeeCollector` after B calls `accept`. If B does not accept and the deal is cancelled, both protocol fee and reward are refunded to A.\n\n"
             "## dealStatus Action Guide\n\n"
             "`dealStatus(dealIndex)` returns the current status (unified, same for all callers). Refer to the table below for actions:\n\n"
@@ -997,7 +1008,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             "> 1. `requestVerification(dealIndex, 0)`\n"
             "> 2. **Must** call `notify_verifier(verifier_address, dealContract, dealIndex, verificationIndex)` to notify the verifier\n"
             "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
-            "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. `confirmSettlement` accepts the counterparty's proposal.\n\n"
+            "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. Call `settlement(dealIndex)` to query proposals and their version numbers. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the counterparty's version from `settlement()` as expectedVersion.\n\n"
             "## Gasless Transactions\n\n"
             "All primary write operations support gasless execution via `BySig` variants. "
             "Use `relay` instead of `invoke` in the wallet skill -- the CLI handles EIP-712 signing and submission automatically.\n";

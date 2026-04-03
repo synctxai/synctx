@@ -209,8 +209,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
     }
 
     function description() external pure override returns (string memory) {
-        return "Factory for X Follow Campaigns. Creates EIP-1167 clone campaigns. "
-               "Each campaign pays fixed USDC reward per X follow.";
+        return "Factory for X Follow Campaigns. Each campaign pays fixed USDC reward per X follow. Creator deposits budget, followers claim rewards.";
     }
 
     function tags() external pure override returns (string[] memory) {

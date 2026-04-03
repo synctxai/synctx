@@ -513,7 +513,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         stl.amountToHolder = amountToHolder;
         stl.version += 1;
 
-        emit SettlementProposed(dealIndex, sender, amountToHolder);
+        emit SettlementProposed(dealIndex, sender, amountToHolder, stl.version);
     }
 
     // ===================== confirmSettlement =====================
@@ -708,8 +708,8 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
 
     function description() external pure override returns (string memory) {
         return
-            "Pairwise European option deal with explicit-consent flow and settlement-price verifier. "
-            "PUT settles in quote token (feeToken); CALL settles in underlying token.";
+            "Pairwise European option deal. 2-party (holder + writer), USDC premium. "
+            "PUT settles in quote token; CALL settles in underlying token.";
     }
 
     function tags() external pure override returns (string[] memory) {
@@ -823,12 +823,13 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
     function settlement(uint256 dealIndex) external view returns (
         address proposer,
         uint256 amountToHolder,
-        uint256 amountToWriter
+        uint256 amountToWriter,
+        uint256 settlementVersion
     ) {
         SettlementProposal storage stl = settlements[dealIndex];
-        if (stl.proposer == address(0)) return (address(0), 0, 0);
+        if (stl.proposer == address(0)) return (address(0), 0, 0, 0);
         uint256 total = deals[dealIndex].reservedCollateral;
-        return (stl.proposer, stl.amountToHolder, total - stl.amountToHolder);
+        return (stl.proposer, stl.amountToHolder, total - stl.amountToHolder, stl.version);
     }
 
     function instruction() external pure override returns (string memory) {
@@ -883,7 +884,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
             "| 6 | Unwound | -- (premium returned to Holder, collateral to Writer) | -- |\n"
             "| 255 | NotFound | Deal does not exist | Deal does not exist |\n\n"
             "> **Timeouts**: Accept = 1 day, Verification = 1 day, Settlement = 3 days.\n\n"
-            "> **Settlement semantics**: `proposeSettlement(dealIndex, amountToHolder)` where amountToHolder is denominated in the collateral asset. Remainder goes to Writer. `confirmSettlement` accepts the counterparty's proposal; `expectedVersion` prevents front-running.\n\n"
+            "> **Settlement semantics**: `proposeSettlement(dealIndex, amountToHolder)` where amountToHolder is denominated in the collateral asset. Remainder goes to Writer. Call `settlement(dealIndex)` to query the current proposal and its version. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the version from `settlement()` as expectedVersion.\n\n"
             "## Gasless Transactions\n\n"
             "All primary write operations support gasless execution via `BySig` variants. "
             "Use `relay` instead of `invoke` in the wallet skill.\n";
