@@ -95,7 +95,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     // ===================== 初始化守卫 & 重入锁 =====================
 
     bool private _initialized;
-    uint256 private _lock;
+    uint256 private _lock = 1;
 
     // ===================== Config（由 factory 在 initialize 时传入） =====================
 
@@ -144,10 +144,10 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     }
 
     modifier nonReentrant() {
-        if (_lock == 1) revert Reentrancy();
-        _lock = 1;
+        if (_lock == 2) revert Reentrancy();
+        _lock = 2;
         _;
-        _lock = 0;
+        _lock = 1;
     }
 
     // ===================== 初始化（替代 constructor，clone 兼容） =====================
@@ -172,6 +172,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     ) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
+        _lock = 1; // clone storage starts at 0; set to 1 for 1/2 reentrancy pattern
 
         // ERC2771 初始化（forwarder 不可变更，admin = address(0)）
         _initForwarder(trustedForwarder_, address(0));

@@ -89,7 +89,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
     uint8   private _serviceMode;      // MODE_TESTING → MODE_OPENING or MODE_CLOSED
     address private _admin;            // deployer，goLive() 后永久清零
 
-    uint256 private _lock;
+    uint256 private _lock = 1;
 
     struct Deal {
         address holder;
@@ -138,10 +138,10 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
     mapping(uint256 => SettlementProposal) internal settlements;
 
     modifier nonReentrant() {
-        if (_lock == 1) revert Reentrancy();
-        _lock = 1;
+        if (_lock == 2) revert Reentrancy();
+        _lock = 2;
         _;
-        _lock = 0;
+        _lock = 1;
     }
 
     modifier onlySlot0(uint256 verificationIndex) {
@@ -191,6 +191,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         if (p.writer == address(0) || p.writer == sender || p.verifier == address(0) || p.underlying == address(0)) {
             revert InvalidParams();
         }
+        if (p.underlying == feeToken) revert InvalidParams();
         if (p.optionType != OPTION_PUT && p.optionType != OPTION_CALL) revert InvalidOptionType();
         if (p.quantity == 0 || p.strike == 0 || p.premium == 0 || p.settlementWindow == 0) revert InvalidParams();
         if (p.expiry <= block.timestamp + MIN_EXPIRY_LEAD) revert InvalidParams();
@@ -334,7 +335,14 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         _emitStatusChanged(dealIndex, SETTLING);
 
         if (verifierFee > 0) {
-            if (!IERC20(feeToken).transfer(msg.sender, verifierFee)) revert TransferFailed();
+            if (result < 0) {
+                // failure — verifier completed work, pay fee
+                if (!IERC20(feeToken).transfer(msg.sender, verifierFee)) revert TransferFailed();
+            } else {
+                // inconclusive — no settlement price delivered, refund to requester
+                address requester = d.requesterIsHolder ? d.holder : d.writer;
+                if (!IERC20(feeToken).transfer(requester, verifierFee)) revert TransferFailed();
+            }
         }
     }
 
@@ -439,12 +447,12 @@ contract EuropeanOptionDealContract is DealBase, Initializable, ERC2771Mixin {
         uint256 holderPayout;
         if (d.optionType == OPTION_PUT) {
             if (settlementPrice < d.strike) {
-                holderPayout = _mulDivUp(d.strike - settlementPrice, d.quantity, UNIT_SCALE);
+                holderPayout = (d.strike - settlementPrice) * d.quantity / UNIT_SCALE;
                 if (holderPayout > d.reservedCollateral) holderPayout = d.reservedCollateral;
             }
         } else {
             if (settlementPrice > d.strike) {
-                holderPayout = _mulDivUp(settlementPrice - d.strike, d.quantity, settlementPrice);
+                holderPayout = (settlementPrice - d.strike) * d.quantity / settlementPrice;
                 if (holderPayout > d.reservedCollateral) holderPayout = d.reservedCollateral;
             }
         }

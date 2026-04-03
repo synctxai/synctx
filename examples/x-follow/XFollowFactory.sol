@@ -51,13 +51,13 @@ contract XFollowFactory is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 重入保护 =====================
 
-    uint256 private _lock;
+    uint256 private _lock = 1;
 
     modifier nonReentrant() {
-        if (_lock == 1) revert Reentrancy();
-        _lock = 1;
+        if (_lock == 2) revert Reentrancy();
+        _lock = 2;
         _;
-        _lock = 0;
+        _lock = 1;
     }
 
     error Reentrancy();

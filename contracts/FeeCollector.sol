@@ -34,7 +34,7 @@ contract FeeCollector is Initializable {
     function sweepFees() external {
         if (feeToken == address(0)) revert FeeTokenNotSet();
         uint256 vaultBalance = IERC20(feeToken).balanceOf(address(this));
-        if (vaultBalance < SWEEP_THRESHOLD) revert BelowThreshold();
+        if (vaultBalance == 0 || vaultBalance < SWEEP_THRESHOLD) revert BelowThreshold();
         if (!IERC20(feeToken).transfer(RECIPIENT, vaultBalance)) revert TransferFailed();
         emit FeeSwept(RECIPIENT, vaultBalance);
     }

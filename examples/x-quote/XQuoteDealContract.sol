@@ -135,7 +135,7 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
 
     // ===================== 存储 =====================
 
-    uint256 private _lock;
+    uint256 private _lock = 1;
 
     mapping(uint256 => Deal) internal deals;
     mapping(uint256 => Settlement) internal settlementByA;
@@ -169,10 +169,10 @@ contract XQuoteDealContract is DealBase, Initializable, ERC2771Mixin {
     }
 
     modifier nonReentrant() {
-        if (_lock == 1) revert Reentrancy();
-        _lock = 1;
+        if (_lock == 2) revert Reentrancy();
+        _lock = 2;
         _;
-        _lock = 0;
+        _lock = 1;
     }
 
     // ===================== 构造函数 =====================

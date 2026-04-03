@@ -10,6 +10,7 @@ contract SyncTxForwarder {
     error ExpiredRequest();
     error NonceMismatch();
     error CallFailed();
+    error PermitFailed();
 
     struct ForwardRequest {
         address from;       // 真实 sender
@@ -38,17 +39,36 @@ contract SyncTxForwarder {
         "uint256 nonce,uint256 deadline,bytes data)"
     );
 
-    bytes32 public immutable DOMAIN_SEPARATOR;
+    /// @dev 部署时缓存的 DOMAIN_SEPARATOR 和 chainId，用于动态 fallback
+    bytes32 private immutable _CACHED_DOMAIN_SEPARATOR;
+    uint256 private immutable _CACHED_CHAIN_ID;
+    bytes32 private immutable _HASHED_NAME;
+    bytes32 private immutable _HASHED_VERSION;
+    bytes32 private constant _DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,"
+        "uint256 chainId,address verifyingContract)"
+    );
+
     mapping(address => uint256) public nonces;
 
     constructor() {
-        DOMAIN_SEPARATOR = keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,"
-                      "uint256 chainId,address verifyingContract)"),
-            keccak256("SyncTxForwarder"),
-            keccak256("1"),
-            block.chainid,
-            address(this)
+        _HASHED_NAME = keccak256("SyncTxForwarder");
+        _HASHED_VERSION = keccak256("1");
+        _CACHED_CHAIN_ID = block.chainid;
+        _CACHED_DOMAIN_SEPARATOR = _buildDomainSeparator();
+    }
+
+    /// @notice 返回当前链的 DOMAIN_SEPARATOR（链分叉时自动重算）
+    function DOMAIN_SEPARATOR() public view returns (bytes32) {
+        return block.chainid == _CACHED_CHAIN_ID
+            ? _CACHED_DOMAIN_SEPARATOR
+            : _buildDomainSeparator();
+    }
+
+    function _buildDomainSeparator() private view returns (bytes32) {
+        return keccak256(abi.encode(
+            _DOMAIN_TYPEHASH, _HASHED_NAME, _HASHED_VERSION,
+            block.chainid, address(this)
         ));
     }
 
@@ -60,7 +80,7 @@ contract SyncTxForwarder {
         if (nonces[req.from] != req.nonce) revert NonceMismatch();
 
         bytes32 digest = keccak256(abi.encodePacked(
-            "\x19\x01", DOMAIN_SEPARATOR,
+            "\x19\x01", DOMAIN_SEPARATOR(),
             keccak256(abi.encode(
                 _TYPEHASH,
                 req.from, req.to,
@@ -89,38 +109,34 @@ contract SyncTxForwarder {
     /// @dev permit() 是 permissionless 的——任何人都可以提交有效的 permit 签名，
     ///      不依赖 msg.sender。所以 Forwarder 可以代替用户调用 permit()。
     ///      用户签两份：(1) EIP-2612 Permit 签名，(2) EIP-712 ForwardRequest 签名。
+    ///      permit 用 try/catch 防御 front-running：攻击者可从 mempool 提取 permit
+    ///      参数抢先调用 token.permit()，消耗 nonce 导致此处 revert。
+    ///      若 permit 失败但 allowance 已足够，则跳过继续执行（Uniswap V3 标准做法）。
     function executeWithPermit(
         PermitData calldata permit,
         ForwardRequest calldata req,
         bytes calldata sig
     ) external returns (bytes memory) {
-        // 1. 执行 permit — 为用户设置 USDC allowance
+        // 1. 执行 permit — 为用户设置 allowance（容忍 front-running）
         if (permit.token != address(0)) {
-            IERC20Permit(permit.token).permit(
+            try IERC20Permit(permit.token).permit(
                 req.from,           // owner = 真实用户
                 permit.spender,     // spender = Deal 合约
                 permit.value,
                 permit.deadline,
                 permit.v, permit.r, permit.s
-            );
+            ) {} catch {
+                // permit 被 front-run 或已执行过——检查 allowance 是否已足够
+                if (IERC20Permit(permit.token).allowance(req.from, permit.spender) < permit.value) {
+                    revert PermitFailed();
+                }
+            }
         }
         // 2. 转发实际调用
         return this.execute(req, sig);
     }
 
-    /// @notice 批量转发（一次 tx 执行多个 meta-tx，节省 base gas）
-    function executeBatch(ForwardRequest[] calldata reqs, bytes[] calldata sigs)
-        external
-    {
-        uint256 len = reqs.length;
-        require(len == sigs.length, "length mismatch");
-        for (uint256 i = 0; i < len; ) {
-            this.execute(reqs[i], sigs[i]);
-            unchecked { ++i; }
-        }
-    }
-
-    function _splitSig(bytes calldata sig)
+function _splitSig(bytes calldata sig)
         private pure returns (uint8 v, bytes32 r, bytes32 s)
     {
         if (sig.length != 65) revert InvalidSignature();
@@ -138,4 +154,5 @@ contract SyncTxForwarder {
 interface IERC20Permit {
     function permit(address owner, address spender, uint256 value,
         uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
+    function allowance(address owner, address spender) external view returns (uint256);
 }

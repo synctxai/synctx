@@ -9,8 +9,8 @@ import "./Initializable.sol";
 /// @title VerifierBase - 验证者抽象基类
 /// @notice 提供通用的验证者功能：owner 管理、DOMAIN_SEPARATOR、结果提交、费用提取。
 /// @dev check() 和 EIP-712 验证逻辑在 VerifierSpec 合约中，不在此处。
-///      VerifierBase 暴露 DOMAIN_SEPARATOR（public immutable）和 signer（public）
-///      供 Spec 的 check() 读取。
+///      VerifierBase 暴露 DOMAIN_SEPARATOR（public view）和 signer（public）
+///      供 Spec 的 check() 读取。DOMAIN_SEPARATOR 支持链分叉时动态重算。
 ///      角色分离：owner（cold key）管理合约和提取费用，signer（hot key）签名和提交结果。
 abstract contract VerifierBase is IVerifier, Initializable {
 
@@ -30,6 +30,7 @@ abstract contract VerifierBase is IVerifier, Initializable {
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SignerChanged(address indexed previousSigner, address indexed newSigner);
+    event FeesWithdrawn(address indexed to, uint256 amount);
 
     // ============ 常量 ============
     // EIP-712 域类型哈希，用于构造 DOMAIN_SEPARATOR。
@@ -40,8 +41,11 @@ abstract contract VerifierBase is IVerifier, Initializable {
 
     // ============ 不可变量 ============
 
-    /// @notice EIP-712 域分隔符（由 name + version + chainId + address 在构造时计算）
-    bytes32 public immutable override DOMAIN_SEPARATOR;
+    /// @dev 部署时缓存的 DOMAIN_SEPARATOR 和 chainId，用于动态 fallback
+    bytes32 private immutable _CACHED_DOMAIN_SEPARATOR;
+    uint256 private immutable _CACHED_CHAIN_ID;
+    bytes32 private immutable _HASHED_NAME;
+    bytes32 private immutable _HASHED_VERSION;
 
     /// @dev Verifier 实例名称
     string private _name;
@@ -70,7 +74,8 @@ abstract contract VerifierBase is IVerifier, Initializable {
     }
 
     // ============ 构造函数 ============
-    // 初始化 owner（部署者）、名称，并计算 EIP-712 DOMAIN_SEPARATOR。
+    // 初始化 owner（部署者）、名称，缓存 EIP-712 DOMAIN_SEPARATOR。
+    // DOMAIN_SEPARATOR 在链分叉（chainId 变化）时自动重算。
     // feeToken 通过 setFeeToken() 在部署后一次性设置（跨链统一地址）。
 
     constructor(string memory name_, string memory version_) {
@@ -78,15 +83,24 @@ abstract contract VerifierBase is IVerifier, Initializable {
         owner = msg.sender;
         signer = msg.sender;
         _name = name_;
-        DOMAIN_SEPARATOR = keccak256(
-            abi.encode(
-                DOMAIN_TYPEHASH,
-                keccak256(bytes(name_)),
-                keccak256(bytes(version_)),
-                block.chainid,
-                address(this)
-            )
-        );
+        _HASHED_NAME = keccak256(bytes(name_));
+        _HASHED_VERSION = keccak256(bytes(version_));
+        _CACHED_CHAIN_ID = block.chainid;
+        _CACHED_DOMAIN_SEPARATOR = _buildDomainSeparator();
+    }
+
+    /// @notice 返回当前链的 DOMAIN_SEPARATOR（链分叉时自动重算）
+    function DOMAIN_SEPARATOR() public view override returns (bytes32) {
+        return block.chainid == _CACHED_CHAIN_ID
+            ? _CACHED_DOMAIN_SEPARATOR
+            : _buildDomainSeparator();
+    }
+
+    function _buildDomainSeparator() private view returns (bytes32) {
+        return keccak256(abi.encode(
+            DOMAIN_TYPEHASH, _HASHED_NAME, _HASHED_VERSION,
+            block.chainid, address(this)
+        ));
     }
 
     // ============ Owner 管理（Ownable2Step） ============
@@ -166,5 +180,6 @@ abstract contract VerifierBase is IVerifier, Initializable {
         if (feeToken == address(0)) revert FeeTokenNotSet();
         if (to == address(0)) revert ZeroAddress();
         if (!IERC20(feeToken).transfer(to, amount)) revert WithdrawFailed();
+        emit FeesWithdrawn(to, amount);
     }
 }

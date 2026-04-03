@@ -10,6 +10,8 @@ abstract contract Initializable {
     error NotInitializer();
     error FeeTokenInvalid();
 
+    event FeeTokenSet(address indexed feeToken);
+
     /// @dev 部署者地址，setFeeToken 调用后清零
     address private _initializer;
 
@@ -32,5 +34,6 @@ abstract contract Initializable {
     function setFeeToken(address feeToken_) external onlyInitializer {
         if (feeToken_ == address(0) || feeToken_.code.length == 0) revert FeeTokenInvalid();
         feeToken = feeToken_;
+        emit FeeTokenSet(feeToken_);
     }
 }
