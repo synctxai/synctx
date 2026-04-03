@@ -885,8 +885,8 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
             "| 255 | NotFound | Deal does not exist | Deal does not exist |\n\n"
             "> **Timeouts**: Accept = 1 day, Verification = 1 day, Settlement = 3 days.\n\n"
             "> **Settlement semantics**: `proposeSettlement(dealIndex, amountToHolder)` where amountToHolder is denominated in the collateral asset. Remainder goes to Writer. Call `settlement(dealIndex)` to query the current proposal and its version. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the version from `settlement()` as expectedVersion.\n\n"
-            "## Gasless Transactions\n\n"
-            "All primary write operations support gasless execution via `BySig` variants. "
-            "Use `relay` instead of `invoke` in the wallet skill.\n";
+            "## Gasless Relay\n\n"
+            "All primary write operations optionally support gasless relay via `BySig` variants (EIP-712 meta-transaction). "
+            "The user signs, a relayer submits on-chain and pays gas.\n";
     }
 }

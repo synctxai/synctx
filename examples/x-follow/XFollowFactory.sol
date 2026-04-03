@@ -205,18 +205,20 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
     // ===================== IDeal 实现（Factory 层） =====================
 
     function name() external pure override returns (string memory) {
-        return "X Follow Factory";
+        return "X(Twitter) Follow Campaign Builder";
     }
 
     function description() external pure override returns (string memory) {
-        return "Factory for X Follow Campaigns. Each campaign pays fixed USDC reward per X follow. Creator deposits budget, followers claim rewards.";
+        return "Create X(Twitter) Follow Campaigns. Pay followers fixed USDC rewards for following your Twitter account.";
     }
 
     function tags() external pure override returns (string[] memory) {
-        string[] memory t = new string[](3);
+        string[] memory t = new string[](5);
         t[0] = "x";
         t[1] = "follow";
-        t[2] = "factory";
+        t[2] = "twitter";
+        t[3] = "kol";
+        t[4] = "campaign";
         return t;
     }
 
@@ -268,8 +270,8 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
 
     function instruction() external view override returns (string memory) {
         return
-            "# X Follow Factory\n\n"
-            "Deploy X Follow Campaigns via EIP-1167 clone pattern. Each campaign pays fixed USDC reward per X follow.\n\n"
+            "# X(Twitter) Follow Campaign Builder\n\n"
+            "Create paid follow campaigns on X(Twitter). Set a budget, define rewards, and followers earn USDC for following your account.\n\n"
             "## createDeal Parameters\n\n"
             "| Parameter | Type | Description |\n"
             "|------|------|------|\n"
@@ -279,24 +281,24 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
             "| rewardPerFollow | uint96 | Reward per successful follow (USDC raw value) |\n"
             "| sigDeadline | uint256 | Verifier signature validity (Unix seconds), must >= campaign deadline + 30min |\n"
             "| sig | bytes | Verifier EIP-712 signature |\n"
-            "| target_user_id | uint64 | Target X/Twitter immutable user_id to be followed |\n"
+            "| target_user_id | uint64 | Target X(Twitter) immutable user_id to be followed |\n"
             "| deadline | uint48 | Campaign end time (Unix seconds) |\n\n"
             "**Prerequisites**:\n"
             "1. Obtain verifier signature via `request_sign` (sig + fee)\n"
-            "2. USDC `approve(factory address, grossAmount)` — the full budget is transferred to the campaign on creation\n"
+            "2. USDC `approve(builder address, grossAmount)` — the full budget is transferred to the campaign on creation\n"
             "3. Query `protocolFeePerClaim()` to calculate budget: grossAmount = slots * (rewardPerFollow + verifierFee + protocolFee)\n\n"
             "## After Creation\n\n"
             "- `createDeal` returns the deployed campaign contract address. Also emitted in `DealCreated` event.\n"
-            "- Query `campaigns(dealIndex)` on the Factory to retrieve the campaign address.\n"
-            "- All follower interactions (claim, status queries) happen on the campaign contract, not the Factory.\n"
+            "- Query `campaigns(dealIndex)` on the builder to retrieve the campaign address.\n"
+            "- All follower interactions (claim, status queries) happen on the campaign contract, not the builder.\n"
             "- Read the campaign's `instruction()` for follower-facing operations and dealStatus guide.\n\n"
-            "## Factory dealStatus\n\n"
+            "## Builder dealStatus\n\n"
             "| Code | Status | Meaning |\n"
             "|----|------|------|\n"
             "| 1 | Created | Campaign deployed and live |\n"
             "| 255 | NotFound | No campaign at this index |\n\n"
-            "## Gasless\n\n"
-            "Both createDeal (A) and claim (B) support embedded EIP-712 meta-transactions. "
-            "Use `relay` instead of `invoke` in the wallet skill.\n";
+            "## Gasless Relay\n\n"
+            "createDeal optionally supports gasless relay via `createDealBySig` (EIP-712 meta-transaction). "
+            "The user signs, a relayer submits on-chain and pays gas.\n";
     }
 }

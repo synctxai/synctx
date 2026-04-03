@@ -975,7 +975,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             "| quoterUserId | uint64 | B's Twitter immutable user_id |\n"
             "| bindingSig | bytes | B's Twitter binding signature (proves B's X account is bound to their wallet address) |\n\n"
             "**Prerequisites**:\n"
-            "1. B must complete Twitter binding before createDeal() -- bind their X account to their wallet address and obtain the binding signature via get-attestation\n"
+            "1. B must complete Twitter binding before createDeal() -- bind their X account to their wallet address and obtain the binding signature via twitter-binding-sig\n"
             "2. B must ensure they have NOT quoted the target tweet before the deal is created. If B has already quoted it, the verifier will reject the task and B will not receive the reward\n"
             "3. A should maintain their own record of which quoters have already quoted the target tweet, to prevent the same quoter from creating duplicate deals for the same tweet\n"
             "4. Both parties have agreed on B's reward and tweet_id. A calls `protocolFee()` to get the protocol fee, grossAmount = reward + protocol fee\n"
@@ -1009,9 +1009,9 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             "> 2. **Must** call `notify_verifier(verifier_address, dealContract, dealIndex, verificationIndex)` to notify the verifier\n"
             "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
             "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. Call `settlement(dealIndex)` to query proposals and their version numbers. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the counterparty's version from `settlement()` as expectedVersion.\n\n"
-            "## Gasless Transactions\n\n"
-            "All primary write operations support gasless execution via `BySig` variants. "
-            "Use `relay` instead of `invoke` in the wallet skill -- the CLI handles EIP-712 signing and submission automatically.\n";
+            "## Gasless Relay\n\n"
+            "All primary write operations optionally support gasless relay via `BySig` variants (EIP-712 meta-transaction). "
+            "The user signs, a relayer submits on-chain and pays gas.\n";
     }
 
     // ===================== 状态查询 =====================
