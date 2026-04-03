@@ -14,6 +14,7 @@ contract GasSponsorVault {
     error TransferFailed();
     error LengthMismatch();
     error NotRegistered();
+    error ReentrancyGuard();
 
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
     event FunderRegistered(address indexed dealContract, address indexed funder);
@@ -25,6 +26,14 @@ contract GasSponsorVault {
     address public immutable RELAYER;
     address payable public immutable TREASURY;
     address public admin;
+
+    uint256 private _lock = 1;
+    modifier nonReentrant() {
+        if (_lock != 1) revert ReentrancyGuard();
+        _lock = 2;
+        _;
+        _lock = 1;
+    }
 
     /// @dev 合约地址 => 剩余 ETH 预算 (wei)
     mapping(address => uint256) public budgets;
@@ -64,7 +73,7 @@ contract GasSponsorVault {
     // ── Funder 操作 ──
 
     /// @notice 为指定合约充值 ETH gas 赞助预算（必须先由 admin 注册）
-    function fund(address dealContract) external payable {
+    function fund(address dealContract) external payable nonReentrant {
         if (dealContract == address(0)) revert ZeroAddress();
         address f = funderOf[dealContract];
         if (f == address(0)) revert NotRegistered();
@@ -74,7 +83,7 @@ contract GasSponsorVault {
     }
 
     /// @notice Funder 提取剩余预算
-    function withdraw(address dealContract, uint256 amount) external {
+    function withdraw(address dealContract, uint256 amount) external nonReentrant {
         if (msg.sender != funderOf[dealContract]) revert OnlyFunder();
         if (budgets[dealContract] < amount) revert InsufficientBudget();
         budgets[dealContract] -= amount;
@@ -91,7 +100,7 @@ contract GasSponsorVault {
     function deductBatch(
         address[] calldata contracts,
         uint256[] calldata costs
-    ) external {
+    ) external nonReentrant {
         if (msg.sender != RELAYER) revert OnlyRelayer();
         if (contracts.length != costs.length) revert LengthMismatch();
 
@@ -114,7 +123,7 @@ contract GasSponsorVault {
     }
 
     /// @notice Relayer 单笔扣费
-    function deduct(address dealContract, uint256 gasCost) external {
+    function deduct(address dealContract, uint256 gasCost) external nonReentrant {
         if (msg.sender != RELAYER) revert OnlyRelayer();
         if (budgets[dealContract] < gasCost) revert InsufficientBudget();
         budgets[dealContract] -= gasCost;

@@ -381,6 +381,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     /// @notice B 声称已完成引用推文，提交 quote_tweet_id
     function claimDone(uint256 dealIndex, string calldata quote_tweet_id)
         external
+        nonReentrant
     {
         _claimDoneCore(msg.sender, dealIndex, quote_tweet_id);
     }
@@ -458,6 +459,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     /// @notice A 取消 B 尚未接受的交易（WAITING_ACCEPT + 已超时）
     function cancelDeal(uint256 dealIndex)
         external
+        nonReentrant
         onlyA(dealIndex)
         atStatus(dealIndex, WAITING_ACCEPT)
     {
@@ -619,6 +621,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     ///      每次提案版本号 +1，确认时需附带版本号防止前端运行覆盖。
     function proposeSettlement(uint256 dealIndex, uint96 amountToA)
         external
+        nonReentrant
     {
         _proposeSettlementCore(msg.sender, dealIndex, amountToA);
     }

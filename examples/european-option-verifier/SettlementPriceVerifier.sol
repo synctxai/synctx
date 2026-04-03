@@ -12,6 +12,7 @@ import "../../contracts/IERC20.sol";
 contract SettlementPriceVerifier is VerifierBase {
 
     error PriceMustBePositive();
+    error PriceAlreadySet();
 
     uint256 public constant MAX_SIGN_DEADLINE_SECONDS = 3600;
 
@@ -54,6 +55,7 @@ contract SettlementPriceVerifier is VerifierBase {
         if (settlementPrice == 0) revert PriceMustBePositive();
 
         bytes32 key = _priceKey(dealContract, dealIndex, verificationIndex);
+        if (_settlementPrices[key] != 0) revert PriceAlreadySet();
         _settlementPrices[key] = settlementPrice;
 
         uint256 balBefore = IERC20(feeToken).balanceOf(address(this));

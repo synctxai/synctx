@@ -483,7 +483,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
 
     // ===================== proposeSettlement =====================
 
-    function proposeSettlement(uint256 dealIndex, uint256 amountToHolder) external {
+    function proposeSettlement(uint256 dealIndex, uint256 amountToHolder) external nonReentrant {
         _proposeSettlementCore(msg.sender, dealIndex, amountToHolder);
     }
 
