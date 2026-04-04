@@ -583,7 +583,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             "## For Followers (B)\n\n"
             "1. Complete Twitter verification on Platform and obtain the Twitter binding signature via `twitter-binding-sig`\n"
             "2. Follow the target account on Twitter\n"
-            "3. Call `claim(userId, bindingSig)` — userId is your Twitter immutable user_id (uint64), bindingSig is the Twitter binding signature (bytes)\n"
+            "3. Call `claim(userId, bindingSig)` -- userId is your Twitter immutable user_id (uint64), bindingSig is the Twitter binding signature (bytes)\n"
             "4. **Must** notify the verifier to begin verification (verifier address: read `verifier()`)\n"
             "5. Wait for verification result\n\n"
             "**Pre-flight**: Call `canClaim(addr, userId, bindingSig)` before claim() to check eligibility (address + userId dedup + binding attestation + budget).\n\n"
