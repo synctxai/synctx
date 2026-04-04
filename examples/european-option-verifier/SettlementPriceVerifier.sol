@@ -63,16 +63,14 @@ contract SettlementPriceVerifier is VerifierBase {
         if (IERC20(feeToken).balanceOf(address(this)) - balBefore < expectedFee) revert FeeNotReceived();
     }
 
+    /// @dev Inconclusive: fee is refunded to the requester by the DealContract, not paid to verifier.
     function reportInconclusive(
         address dealContract,
         uint256 dealIndex,
         uint256 verificationIndex,
-        string calldata reason,
-        uint256 expectedFee
+        string calldata reason
     ) external onlySigner {
-        uint256 balBefore = IERC20(feeToken).balanceOf(address(this));
         IDeal(dealContract).onVerificationResult(dealIndex, verificationIndex, 0, reason);
-        if (IERC20(feeToken).balanceOf(address(this)) - balBefore < expectedFee) revert FeeNotReceived();
     }
 
     function reportFailure(

@@ -262,6 +262,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             // Budget exhausted, auto-close
             if (pendingClaims == 0) {
                 campaignStatus = CLOSED;
+                _emitServiceModeChanged(MODE_CLOSED);
             }
             revert BudgetExhausted();
         }
@@ -394,6 +395,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     function closeCampaign() external onlyA {
         if (campaignStatus != OPEN) revert CampaignNotOpen();
         campaignStatus = CLOSED;
+        _emitServiceModeChanged(MODE_CLOSED);
     }
 
     /// @notice When CLOSED and no pending claims, A withdraws remaining budget
@@ -417,8 +419,10 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (campaignStatus != OPEN) return;
         if (block.timestamp > deadline) {
             campaignStatus = CLOSED;
+            _emitServiceModeChanged(MODE_CLOSED);
         } else if (budget < _claimCost() && pendingClaims == 0) {
             campaignStatus = CLOSED;
+            _emitServiceModeChanged(MODE_CLOSED);
         }
     }
 
@@ -466,7 +470,7 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (block.timestamp > deadline) return false;
         if (budget < _claimCost()) return false;
         if (claimedAddress[addr]) return false;
-        if (claimedUserId[userId]) return false;
+        if (claimedUserId[userId] != 0) return false;
         if (failCount[addr] >= MAX_FAILURES) return false;
         if (_hasPendingClaim(addr)) return false;
         if (!bindingAttestation.verify(addr, userId, bindingSig)) return false;
