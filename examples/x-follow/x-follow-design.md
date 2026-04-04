@@ -20,9 +20,8 @@
 XFollowFactory (developer deploys once)
   │  ├── implementation: XFollowCampaign (logic contract)
   │  ├── protocolFee, feeCollector (→ developer)
-  │  ├── trustedForwarder (ERC2771, shared by all children)
   │  ├── requiredSpec, platformSigner (shared config)
-  │  └── relayer vault funds gas for A + B (developer pre-funded)
+  │  └── GasSponsorVault funds gas for A + B (developer pre-funded)
   │
   ├── createDeal() → Clones.clone(impl) + initialize()
   │     └── XFollowCampaign (child 1, A₁'s campaign)
@@ -39,7 +38,7 @@ XFollowFactory (developer deploys once)
 
 - **Inheritance:** both `XFollowFactory` and `XFollowCampaign` are full `IDeal → DealBase` contracts; factory is the parent entry/index, child is the executable campaign
 - **Clone pattern:** EIP-1167 minimal proxy. All children share implementation bytecode, each has own storage
-- **Gasless:** Factory sets `trustedForwarder` → children inherit → A's createDeal and B's claim() both gasless via relayer. Gas paid from developer's relayer vault
+- **Gasless:** Contracts use MetaTxMixin for BySig functions (createDealBySig, claimBySig, etc.), relayer submits on-chain. Gas paid from developer's GasSponsorVault
 - **Lifecycle:** `createDeal()` → child enters OPEN immediately (no TESTING phase)
 - **Auto-registration:** Factory emits `SubContractCreated(address subContract)` → platform monitors factory events → auto-discovers and registers child contracts
 - **Identity:** Binding Attestation (platformSigner verification) mandatory for B
@@ -63,7 +62,6 @@ contract XFollowFactory is DealBase {
     uint96  public immutable PROTOCOL_FEE;       // per-claim fee (e.g. 10000 = 0.01 USDC)
     address public immutable REQUIRED_SPEC;      // XFollowVerifierSpec address
     address public immutable PLATFORM_SIGNER;    // Binding Attestation signer
-    address public immutable TRUSTED_FORWARDER;  // ERC2771 forwarder (gasless for A + B)
     address public immutable FEE_TOKEN;          // USDC address
 
     // ===================== Events =====================
@@ -137,7 +135,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
 | Method | Caller | Description |
 |--------|--------|-------------|
-| `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | Developer | Deploy factory with all shared config |
+| `constructor(impl, feeCollector, protocolFee, spec, bindingAttestation)` | Developer | Deploy factory with all shared config |
 | `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
 
 ### 3.2 XFollowCampaign Functions
@@ -230,8 +228,8 @@ sequenceDiagram
 
     Note over Dev: One-time setup
     Dev->>Dev: Deploy XFollowCampaign (implementation)
-    Dev->>Dev: Deploy XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, registry, forwarder, feeToken)
-    Dev->>Dev: Fund relayer vault for gasless transactions
+    Dev->>Dev: Deploy XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, bindingAttestation)
+    Dev->>Dev: Deploy GasSponsorVault and fund gas budget
     Dev->>P: Register factory on platform
 
     Note over A,Fac: Campaign Creation (gasless via relayer)
@@ -371,12 +369,12 @@ otherwise                → eligible
 
 ```
 Developer deploys:
-  1. SyncTxForwarder (ERC2771 trusted forwarder)
-  2. XFollowCampaign implementation (with ERC2771Mixin)
-  3. XFollowFactory(impl, ..., trustedForwarder = forwarder)
-  4. Fund relayer vault (gas budget)
+  1. GasSponsorVault (gas sponsorship vault)
+  2. XFollowCampaign implementation (with MetaTxMixin)
+  3. XFollowFactory(impl, feeCollector, protocolFee, spec, bindingAttestation)
+  4. Fund GasSponsorVault (gas budget)
 
-All child contracts call _initForwarder() during initialize() to set trustedForwarder from factory.
+Contracts embed MetaTxMixin for EIP-712 signature verification and nonce management; no external forwarder needed.
 ```
 
 ### 7.2 Who Pays Gas

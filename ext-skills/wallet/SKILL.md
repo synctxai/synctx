@@ -122,7 +122,7 @@ uv run scripts/run.py relay 0x...contract... "accept(uint256)" --args '["3"]' --
 uv run scripts/run.py relay-with-permit 0x...token... 0x...contract... 1000000 "createDeal(...)" --args '[...]' --chain 8453
 ```
 
-> **When to use relay vs invoke**: If `relay-check` returns `available: true`, prefer `relay` over `invoke` — the user pays zero gas. If relay is unavailable (no forwarder, relayer down), fall back to `invoke`.
+> **When to use relay vs invoke**: If `relay-check` returns `available: true`, prefer `relay` over `invoke` — the user pays zero gas. If relay is unavailable (relayer down, vault empty), fall back to `invoke`.
 
 ### Signing
 

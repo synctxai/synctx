@@ -20,9 +20,8 @@
 XFollowFactory（开发者部署一次）
   │  ├── implementation: XFollowCampaign（逻辑合约）
   │  ├── protocolFee, feeCollector（→ 开发者）
-  │  ├── trustedForwarder（ERC2771，所有子合约共享）
   │  ├── requiredSpec, platformSigner（共享配置）
-  │  └── relayer vault 为 A + B 的 gasless 交易提供 gas（开发者预充）
+  │  └── GasSponsorVault 为 A + B 的 gasless 交易提供 gas（开发者预充）
   │
   ├── createDeal() → Clones.clone(impl) + initialize()
   │     └── XFollowCampaign（子合约 1，A₁ 的 campaign）
@@ -39,7 +38,7 @@ XFollowFactory（开发者部署一次）
 
 - **继承链：** `XFollowFactory` 与 `XFollowCampaign` 都是完整的 `IDeal → DealBase` 合约；factory 负责入口与索引，child 负责实际 campaign 执行
 - **Clone 模式：** EIP-1167 最小代理。所有子合约共享 implementation 字节码，各自有独立 storage
-- **Gasless：** 工厂设置 `trustedForwarder` → 子合约继承 → A 的 createDeal 和 B 的 claim() 均通过 relayer 免 gas。Gas 由开发者的 relayer vault 支付
+- **Gasless：** 合约通过 MetaTxMixin 提供 BySig 函数（createDealBySig、claimBySig 等），Relayer 代提交上链。Gas 由开发者的 GasSponsorVault 支付
 - **生命周期：** `createDeal()` → 子合约直接进入 OPEN（无 TESTING 阶段）
 - **自动注册：** 工厂 emit `SubContractCreated(address subContract)` → 平台监听工厂事件 → 自动发现并注册子合约
 - **身份：** Binding Attestation（platformSigner 验签）为 B 的强制要求
@@ -63,7 +62,6 @@ contract XFollowFactory is DealBase {
     uint96  public immutable PROTOCOL_FEE;       // 每次 claim 的手续费（如 10000 = 0.01 USDC）
     address public immutable REQUIRED_SPEC;      // XFollowVerifierSpec 地址
     address public immutable PLATFORM_SIGNER;    // Binding Attestation 签名者
-    address public immutable TRUSTED_FORWARDER;  // ERC2771 转发器（A + B 免 gas）
     address public immutable FEE_TOKEN;          // USDC 地址
 
     // ===================== 事件 =====================
@@ -137,7 +135,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
-| `constructor(impl, feeCollector, protocolFee, spec, registry, forwarder, feeToken)` | 开发者 | 部署工厂，设置共享配置 |
+| `constructor(impl, feeCollector, protocolFee, spec, bindingAttestation)` | 开发者 | 部署工厂，设置共享配置 |
 | `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
 
 ### 3.2 XFollowCampaign 函数
@@ -230,8 +228,8 @@ sequenceDiagram
 
     Note over Dev: 一次性设置
     Dev->>Dev: 部署 XFollowCampaign（implementation）
-    Dev->>Dev: 部署 XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, registry, forwarder, feeToken)
-    Dev->>Dev: 为 relayer vault 充值 gas 费用
+    Dev->>Dev: 部署 XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, bindingAttestation)
+    Dev->>Dev: 部署 GasSponsorVault 并充值 gas 费用
     Dev->>P: 在平台注册工厂
 
     Note over A,Fac: Campaign 创建（通过 relayer 免 gas）
@@ -371,12 +369,12 @@ budget < claimCost       → 自动关闭 → CLOSED
 
 ```
 开发者部署：
-  1. SyncTxForwarder（ERC2771 信任转发器）
-  2. XFollowCampaign implementation（含 ERC2771Mixin）
-  3. XFollowFactory(impl, ..., trustedForwarder = forwarder)
-  4. 为 relayer vault 充值（gas 预算）
+  1. GasSponsorVault（gas 赞助金库）
+  2. XFollowCampaign implementation（含 MetaTxMixin）
+  3. XFollowFactory(impl, feeCollector, protocolFee, spec, bindingAttestation)
+  4. 为 GasSponsorVault 充值（gas 预算）
 
-所有子合约在 initialize() 时调用 _initForwarder() 设置 trustedForwarder。
+合约通过 MetaTxMixin 内嵌 EIP-712 签名验证和 nonce 管理，无需外部 forwarder。
 ```
 
 ### 7.2 谁支付 Gas
