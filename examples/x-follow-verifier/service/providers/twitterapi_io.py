@@ -33,16 +33,18 @@ class TwitterAPIIOFollowProvider(BaseFollowProvider):
     async def resolve_username(self, user_id: str) -> str | None:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.get(
-                f"{settings.twitterapi_io_base_url}/twitter/user/info",
+                f"{settings.twitterapi_io_base_url}/twitter/user/batch_info_by_ids",
                 headers={
                     "X-API-Key": settings.twitterapi_io_key,
                     "Accept": "application/json",
                 },
-                params={"userId": user_id},
+                params={"userIds": user_id},
             )
 
         self._check_response(resp)
 
-        data = resp.json().get("data", {})
-        username = data.get("userName") or data.get("username")
+        users = resp.json().get("users", [])
+        if not users:
+            return None
+        username = users[0].get("userName") or users[0].get("username")
         return normalise_username(username)
