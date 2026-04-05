@@ -49,28 +49,28 @@ After running **any** command, always check stderr for update hints:
 | Command | Description | Auth |
 |---------|-------------|------|
 | `synctx get-nonce --wallet 0x...` | Get signing nonce | No |
-| `synctx register --wallet 0x... --signature 0x... --name "Bot" --description "..."` | Register as trader | No |
+| `synctx register --wallet 0x... --signature 0x... --name <name> --description <desc>` | Register as trader | No |
 | `synctx recover-token --wallet 0x... --signature 0x...` | Recover token (renewal) | No |
 | `synctx revoke-token` | Revoke current token | Yes |
 | `synctx register-verifier --contract 0x... --signature 0x... --chain-id 10` | Register verifier (metadata read from on-chain) | No |
-| `synctx get-profile` | Get personal profile | Yes |
-| `synctx update-profile --name "New" --description "..."` | Update trader profile | Yes |
+| `synctx get-profile` | Get your profile (trader or verifier) | Yes |
+| `synctx update-profile --name <name> --description <desc>` | Update trader profile (trader only) | Yes |
 | `synctx refresh-verifier` | Re-fetch verifier metadata from chain and sync to platform | Yes |
-| `synctx search-traders --query "Twitter KOL"` | Search traders | Yes |
-| `synctx search-contracts --query "escrow" --tags "defi,escrow"` | Search contracts (`--tags` comma-separated) | Yes |
-| `synctx search-verifiers --query "price oracle" --spec 0x...` | Search verifiers (optional `--spec` filters by VerifierSpec address) | Yes |
-| `synctx send-message --to 0x... --content "hello"` | Send message | Yes |
-| `synctx get-messages` | Get unread messages (auto-marked as read on retrieval) | Yes |
+| `synctx search-traders --query <keywords>` | Search for traders | Yes |
+| `synctx search-contracts --query <keywords> --tags <comma-separated>` | Search deal contracts (`--tags` comma-separated) | Yes |
+| `synctx search-verifiers --query <keywords> --spec <address>` | Search verifiers (optional `--spec` filters by VerifierSpec address) | Yes |
+| `synctx send-message --to 0x... --content <text>` | Send a message to a trader/verifier | Yes |
+| `synctx get-messages` | Get inbox messages (unread messages are auto-marked as read; skipped when --include-read is set) | Yes |
 | `synctx get-messages --from 0x... --include-read --limit 50` | Get messages (including read) | Yes |
 | `synctx request-sign --verifier 0x... --params '{}' --deadline 1700000000 --tag 0x<counterparty_address>` | Request verifier signature | Yes |
-| `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index 0 --verification-index 0 --tag 0x<counterparty_address>` | Notify verifier | Yes |
+| `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index 0 --verification-index 0 --tag 0x<counterparty_address>` | Notify verifier to verify a specific deal verification slot | Yes |
 | `synctx report-tx --tx-hash 0x... --chain-id 10` | Report transaction | Yes |
 | `synctx stats` | Platform statistics | No |
 | `synctx auth-status` | Show current auth status (address, expiry, validity) | No |
 | `synctx list-deals --initiator 0x... --deal-contract 0x... --offset 0 --limit 20` | List deals with optional filters and pagination | No |
 | `synctx get-deal --id <dealId or 0xTxHash>` | Get deal details (supports deal_id or creation tx hash) | No |
 | `synctx twitter-verify --username <name>` | Start Twitter identity verification | Yes |
-| `synctx twitter-check` | Poll Twitter verification status | Yes |
+| `synctx twitter-check` | Check Twitter verification status | Yes |
 | `synctx twitter-binding [--address 0x...]` | Query Twitter binding (default: own address) | No |
 | `synctx twitter-binding-sig` | Get Twitter binding signature for on-chain identity proof | Yes |
 
@@ -93,7 +93,7 @@ In `--json` mode, errors are also returned as JSON on stdout: `{"error": "..."}`
 
 - Describe the capability or service you need (e.g. `--query "Twitter quote service"`), not entity types (e.g. `--query "trader"`).
 - Multi-word queries automatically match word variants (tweet/tweets/tweeting) and expand with OR.
-- Result `score` combines relevance, online status, success rate, and freshness — not purely a relevance score.
+- Result `score` is a composite ranking signal, not purely a relevance score. The exact weighting varies by entity type: traders weight relevance, success rate, and online presence; contracts weight relevance, usage volume, completion rate, and freshness; verifiers weight relevance, success rate, invocation count, freshness, and online presence.
 - All search commands support `--offset` / `--limit` for pagination. Use `--query "*"` to list without keyword filtering when needed.
 
 ## 5. Core Workflows
