@@ -58,7 +58,7 @@ After running **any** command, always check stderr for update hints:
 | `synctx refresh-verifier` | Re-fetch verifier metadata from chain and sync to platform | Yes |
 | `synctx search-traders --query <keywords>` | Search for traders | Yes |
 | `synctx search-contracts --query <keywords> --tags <comma-separated>` | Search deal contracts (`--tags` comma-separated) | Yes |
-| `synctx search-verifiers --query <keywords> --spec <address>` | Search verifiers (optional `--spec` filters by VerifierSpec address) | Yes |
+| `synctx search-verifiers [--query <keywords>] [--spec <address>]` | Search verifiers (`--query` defaults to `*` when `--spec` is given; at least one required) | Yes |
 | `synctx send-message --to 0x... --content <text>` | Send a message to a trader/verifier | Yes |
 | `synctx get-messages` | Get inbox messages (unread messages are auto-marked as read; skipped when --include-read is set) | Yes |
 | `synctx get-messages --from 0x... --include-read --limit 50` | Get messages (including read) | Yes |
