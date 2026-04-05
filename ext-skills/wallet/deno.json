@@ -1,7 +1,16 @@
 {
+  "permissions": {
+    "default": {
+      "net": true,
+      "env": true,
+      "read": true,
+      "write": true
+    }
+  },
   "imports": {
     "viem": "npm:viem@^2",
-    "viem/": "npm:viem@^2/",
+    "viem/accounts": "npm:viem@^2/accounts",
+    "viem/chains": "npm:viem@^2/chains",
     "@std/cli": "jsr:@std/cli@^1",
     "@std/dotenv": "jsr:@std/dotenv@^0"
   }

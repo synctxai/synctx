@@ -13,18 +13,22 @@ metadata:
 ## On Load
 
 ```bash
-W="deno run --allow-net --allow-env --allow-read --allow-write scripts/run.ts"
+# 0. Check deno is available
+if ! command -v deno &>/dev/null; then
+  echo '{"error":"deno not found. Install: curl -fsSL https://deno.land/install.sh | sh"}' >&2
+  exit 4
+fi
 
 # 1. Check wallet status
-$W check-wallet
+deno run -P scripts/run.ts check-wallet
 # If status is "no_env" or "no_key":
-$W generate-wallet
+deno run -P scripts/run.ts generate-wallet
 
 # 2. Show address
-$W address
+deno run -P scripts/run.ts address
 
 # 3. Check balances
-$W balance
+deno run -P scripts/run.ts balance
 ```
 
 ## Command Reference
@@ -40,9 +44,9 @@ $W balance
 ### Balance
 
 ```bash
-$W balance                                   # All 4 chains: ETH + USDC
-$W balance --chain 8453                      # Single chain: ETH + USDC
-$W balance --token 0xTOKEN --chain 8453      # Specific ERC20 on specific chain
+deno run -P scripts/run.ts balance                                   # All 4 chains: ETH + USDC
+deno run -P scripts/run.ts balance --chain 8453                      # Single chain: ETH + USDC
+deno run -P scripts/run.ts balance --token 0xTOKEN --chain 8453      # Specific ERC20 on specific chain
 ```
 
 ### Contract Read
@@ -55,8 +59,8 @@ Function signature format: `name(inputTypes)->(outputTypes)`
 - `approve(address,uint256)->(bool)` — bool return
 
 ```bash
-$W read CONTRACT "balanceOf(address)->(uint256)" --args '["0xOwner"]' --chain 8453
-$W read CONTRACT "name()->(string)"
+deno run -P scripts/run.ts read CONTRACT "balanceOf(address)->(uint256)" --args '["0xOwner"]' --chain 8453
+deno run -P scripts/run.ts read CONTRACT "name()->(string)"
 ```
 
 Use `--from 0xAddress` when the view function depends on `msg.sender`.
@@ -72,49 +76,49 @@ When a call requires token approval, use `--approve TOKEN:AMOUNT`. In gasless mo
 
 ```bash
 # Gasless
-$W send CONTRACT "accept(uint256)" --args '["42"]' --gasless gelato
+deno run -P scripts/run.ts send CONTRACT "accept(uint256)" --args '["42"]' --gasless gelato
 
 # Self-pay
-$W send CONTRACT "accept(uint256)" --args '["42"]'
+deno run -P scripts/run.ts send CONTRACT "accept(uint256)" --args '["42"]'
 
 # With token approval (gasless, atomic)
-$W send CONTRACT "createDeal(address,uint96)" \
+deno run -P scripts/run.ts send CONTRACT "createDeal(address,uint96)" \
   --args '["0x...", "1000000"]' \
   --approve 0xUSDC:1000000 --gasless gelato
 
 # With token approval (self-pay, two txs)
-$W send CONTRACT "createDeal(address,uint96)" \
+deno run -P scripts/run.ts send CONTRACT "createDeal(address,uint96)" \
   --args '["0x...", "1000000"]' \
   --approve 0xUSDC:1000000
 
 # Preview without submitting
-$W send CONTRACT "fn()" --dry-run
+deno run -P scripts/run.ts send CONTRACT "fn()" --dry-run
 
 # With ETH value (rare, self-pay only)
-$W send CONTRACT "deposit()" --value 1000000000000000000
+deno run -P scripts/run.ts send CONTRACT "deposit()" --value 1000000000000000000
 ```
 
 ### Signing
 
 ```bash
-$W sign "hello world"                                    # EIP-191
-$W sign-typed '{"domain":{...},"types":{...},...}'       # EIP-712
+deno run -P scripts/run.ts sign "hello world"                                    # EIP-191
+deno run -P scripts/run.ts sign-typed '{"domain":{...},"types":{...},...}'       # EIP-712
 ```
 
 ### ABI Discovery & Decoding
 
 ```bash
-$W list-functions CONTRACT --chain 8453                  # List read/write functions
-$W decode-logs TX_HASH CONTRACT --chain 8453             # Decode event logs
-$W decode-revert HEX_DATA --contract 0x... --chain 8453  # Decode revert reason
+deno run -P scripts/run.ts list-functions CONTRACT --chain 8453                  # List read/write functions
+deno run -P scripts/run.ts decode-logs TX_HASH CONTRACT --chain 8453             # Decode event logs
+deno run -P scripts/run.ts decode-revert HEX_DATA --contract 0x... --chain 8453  # Decode revert reason
 ```
 
 ### Utilities
 
 ```bash
-$W to-raw 1.5 --decimals 6          # → 1500000
-$W fmt 1500000 --decimals 6 --symbol USDC  # → "1.5 USDC"
-$W relay-status TASK_ID              # Check relay task status
+deno run -P scripts/run.ts to-raw 1.5 --decimals 6          # → 1500000
+deno run -P scripts/run.ts fmt 1500000 --decimals 6 --symbol USDC  # → "1.5 USDC"
+deno run -P scripts/run.ts relay-status TASK_ID              # Check relay task status
 ```
 
 ## Output Format

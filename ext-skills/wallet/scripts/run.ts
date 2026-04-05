@@ -37,11 +37,15 @@ function fail(code: number, message: string): never {
 // Main
 // ---------------------------------------------------------------------------
 
-const args = parseArgs(Deno.args, {
-  string: ["chain", "token", "args", "from", "approve", "value", "decimals", "symbol", "contract", "gasless"],
+// Force all positional args to string to prevent 0x... addresses being parsed as numbers
+const rawArgs = Deno.args.map(a => a);
+const args = parseArgs(rawArgs, {
+  string: ["chain", "token", "args", "from", "approve", "value", "decimals", "symbol", "contract", "gasless", "_"],
   boolean: ["dry-run", "help"],
   alias: { h: "help" },
 });
+// parseArgs may still coerce positional args; ensure they are strings
+args._ = args._.map((v) => String(v));
 
 const command = args._[0] as string | undefined;
 
