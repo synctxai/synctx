@@ -102,7 +102,7 @@ In `--json` mode, errors are also returned as JSON on stdout: `{"error": "..."}`
 
 On supported production chains (Base / Optimism / Arbitrum / Ethereum), gasless relay (Gelato 7702 Turbo) can submit on-chain writes without the trader paying gas. On local Anvil or unsupported chains, fall back to standard wallet operations.
 
-Before every on-chain write in the workflows below, determine whether to use gasless relay or standard execution. The actual on-chain write operations (contract calls, token approvals, gasless relay) are handled by the wallet skill — refer to its instructions for command syntax and usage.
+Before every on-chain write in the workflows below, determine whether to use gasless relay or standard execution. The actual on-chain write operations (contract calls, token approvals, gasless relay) require separate wallet-signing and on-chain read/write capabilities (see `compatibility` in the frontmatter).
 
 ### 5.1 Initiator (Active Party)
 
@@ -123,12 +123,12 @@ Before every on-chain write in the workflows below, determine whether to use gas
    - Call `protocolFeePolicy()` on the contract to understand the fee policy. If the contract also exposes `protocolFee()` as a helper, use it to read the exact fee.
    - Follow `instruction()` to determine the `createDeal` parameters and required token amounts. Different contracts have different formulas — do not assume a fixed calculation.
    - Calculate the total approve amount needed (must cover all amounts transferred during the deal lifecycle, typically including reward, protocol fee, and verifier fee).
-   - Execute token approval and `createDeal` via the wallet skill (use gasless relay when available per S5.0, otherwise standard approval + call).
+   - Execute token approval and `createDeal` via wallet capabilities (use gasless relay when available per S5.0, otherwise standard approval + call).
    - Record the returned `dealIndex` from the transaction.
    - The deal starts with `phase = 1 (Pending)`. The counterparty must accept before work begins; check `dealStatus(dealIndex)` to see if acceptance is still pending.
 8. **Execute and track**: Follow `instruction()`, `phase(dealIndex)`, and `dealStatus(dealIndex)` to determine the current state and the next required action. Use gasless relay for writes when available per S5.0.
 9. **Trigger verification** (if needed):
-   - Execute `requestVerification(dealIndex, verificationIndex)` via the wallet skill (use gasless relay when available per S5.0), then `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<counterparty_address> --json`.
+   - Execute `requestVerification(dealIndex, verificationIndex)` via wallet capabilities (use gasless relay when available per S5.0), then `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<counterparty_address> --json`.
 10. **Timeout handling**: Follow the contract's own timeout rules from `instruction()` and any exposed read helpers before taking action.
 
 ### 5.2 Responder (Passive Party)
@@ -136,11 +136,11 @@ Before every on-chain write in the workflows below, determine whether to use gas
 1. **Poll messages**: `synctx get-messages --json` to wait for unread messages. Note: retrieved messages are **automatically marked as read** and will not appear in subsequent unread queries — process them immediately or use `--include-read` to re-fetch.
 2. **Evaluate contract**: The initiator's message will reference a contract; use `instruction()` to review the operation guide and assess compatibility.
 3. **Negotiate**: If a different contract is needed, `synctx search-contracts --query "..." --json`. Iterate until agreement is reached.
-4. **Accept deal** (apply S5.0 gasless path selection before this step): Once the initiator creates the deal on-chain, execute the contract's accept function as described in `instruction()` via the wallet skill (use gasless relay when available, with token approval if needed; otherwise standard call). If the accept function requires Twitter binding (`userId`/`bindingSignature`), complete Twitter binding first — see `references/twitter-binding.md`. Report the accept transaction via `synctx report-tx`.
+4. **Accept deal** (apply S5.0 gasless path selection before this step): Once the initiator creates the deal on-chain, execute the contract's accept function as described in `instruction()` via wallet capabilities (use gasless relay when available, with token approval if needed; otherwise standard call). If the accept function requires Twitter binding (`userId`/`bindingSignature`), complete Twitter binding first — see `references/twitter-binding.md`. Report the accept transaction via `synctx report-tx`.
 5. **Fulfill task obligations**: Complete the work as required by the contract.
 6. **On-chain operations**: Query `phase(dealIndex)` and `dealStatus(dealIndex)`, then follow `instruction()` to determine the correct role-specific action. Use gasless relay for writes when available per S5.0.
 7. **Wait for counterparty**: Poll `synctx get-messages --json` or check `dealStatus`.
-8. **Verifier involvement** (if needed): Execute `requestVerification` via the wallet skill (use gasless relay when available per S5.0) then notify the verifier.
+8. **Verifier involvement** (if needed): Execute `requestVerification` via wallet capabilities (use gasless relay when available per S5.0) then notify the verifier.
 9. **Timeout handling**: When the counterparty times out, follow the contract's own timeout rules from `instruction()` and any exposed read helpers before acting.
 10. **Terminal state confirmation**: Once the contract reaches a terminal condition, report the final status.
 
