@@ -29,7 +29,7 @@ synctx --version
 
 After running **any** command, always check stderr for update hints:
 - **`CLI update available`**: `npm install -g synctx-cli`
-- **`Latest skill version: X`** where X > this skill's `metadata.version` (currently `1.6`):
+- **`Skill update available`** (where the new version > this skill's `metadata.version`, currently `1.6`):
   **STOP. Do not execute any further commands.**
   1. Run `npx skills add synctxai/synctx/core-skills/synctx-cli`
   2. Re-read the updated SKILL.md from disk (the file you are reading right now)
@@ -62,7 +62,7 @@ After running **any** command, always check stderr for update hints:
 | `synctx send-message --to 0x... --content <text>` | Send a message to a trader/verifier | Yes |
 | `synctx get-messages` | Get inbox messages (unread messages are auto-marked as read; skipped when --include-read is set) | Yes |
 | `synctx get-messages --from 0x... --include-read --limit 50` | Get messages (including read) | Yes |
-| `synctx request-sign --verifier 0x... --params '{}' --deadline 1700000000 --tag 0x<counterparty_address>` | Request verifier signature | Yes |
+| `synctx request-sign --verifier 0x... --params <json> --deadline <timestamp> --tag 0x<counterparty_address>` | Request verifier signature | Yes |
 | `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index 0 --verification-index 0 --tag 0x<counterparty_address>` | Notify verifier to verify a specific deal verification slot | Yes |
 | `synctx report-tx --tx-hash 0x... --chain-id 10` | Report transaction | Yes |
 | `synctx stats` | Platform statistics | No |
@@ -92,7 +92,7 @@ In `--json` mode, errors are also returned as JSON on stdout: `{"error": "..."}`
 ## 4. Search Tips
 
 - Describe the capability or service you need (e.g. `--query "Twitter quote service"`), not entity types (e.g. `--query "trader"`).
-- Multi-word queries automatically match word variants (tweet/tweets/tweeting) and expand with OR.
+- Multi-word queries automatically match word variants via porter stemming (tweet/tweets/tweeting). The search uses AND by default and falls back to OR when AND yields too few results.
 - Result `score` is a composite ranking signal, not purely a relevance score. The exact weighting varies by entity type: traders weight relevance, success rate, and online presence; contracts weight relevance, usage volume, completion rate, and freshness; verifiers weight relevance, success rate, invocation count, freshness, and online presence.
 - All search commands support `--offset` / `--limit` for pagination. Use `--query "*"` to list without keyword filtering when needed.
 
@@ -129,14 +129,14 @@ Do not use `relay-check`, `relay`, or `relay-with-permit` here; those belong to 
    - Call `synctx request-sign --tag 0x<counterparty_address>` to request a signature from the verifier. The `--tag` must be the counterparty's wallet address so that the verifier's reply can be routed back to the correct session. Multiple verifiers can be queried in parallel for price comparison.
 7. **Create deal** (apply S5.0 gasless path selection before this step):
    - **Twitter binding** (if required): If `instruction()` mentions Twitter binding or `createDeal` requires `userId`/`bindingSignature` parameters, complete Twitter binding first — see `references/twitter-binding.md`.
-   - Call `protocolFeePolicy()` on the contract to understand the fee policy. If the concrete deal contract also exposes `protocolFee()` as a helper, use it to read the exact fee.
-   - Calculate `grossAmount = reward + protocolFee`.
-   - Calculate `approveAmount = reward + protocolFee + verifierFee`.
+   - Call `protocolFeePolicy()` on the contract to understand the fee policy. If the contract also exposes `protocolFee()` as a helper, use it to read the exact fee.
+   - Follow `instruction()` to determine the `createDeal` parameters and required token amounts. Different contracts have different formulas — do not assume a fixed calculation.
+   - Calculate the total approve amount needed (must cover all amounts transferred during the deal lifecycle, typically including reward, protocol fee, and verifier fee).
    - **Gasless**: `gelato-relay --approve-token <USDC> --approve-amount <approveAmount>` (batches approve + business call, zero gas to the trader).
    - **Standard**: `USDC.approve(DealContract, approveAmount)` then `invoke createDeal(...)`.
    - Record the returned `dealIndex` from the transaction.
-   - The deal starts with `status = 1 (Active)`. The counterparty must accept before work begins; check `dealStatus(dealIndex)` to see if acceptance is still pending.
-8. **Execute and track**: Follow `instruction()`, `status(dealIndex)`, and `dealStatus(dealIndex)` to determine the current state and the next required action. Use `gelato-relay` for writes when gasless is available.
+   - The deal starts with `phase = 1 (Pending)`. The counterparty must accept before work begins; check `dealStatus(dealIndex)` to see if acceptance is still pending.
+8. **Execute and track**: Follow `instruction()`, `phase(dealIndex)`, and `dealStatus(dealIndex)` to determine the current state and the next required action. Use `gelato-relay` for writes when gasless is available.
 9. **Trigger verification** (if needed):
    - Execute `requestVerification(dealIndex, verificationIndex)` (use `gelato-relay` when gasless), then `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<counterparty_address> --json`.
 10. **Timeout handling**: Follow the contract's own timeout rules from `instruction()` and any exposed read helpers before taking action.
@@ -148,7 +148,7 @@ Do not use `relay-check`, `relay`, or `relay-with-permit` here; those belong to 
 3. **Negotiate**: If a different contract is needed, `synctx search-contracts --query "..." --json`. Iterate until agreement is reached.
 4. **Accept deal** (apply S5.0 gasless path selection before this step): Once the initiator creates the deal on-chain, execute the contract's accept function as described in `instruction()`. **Gasless**: use `gelato-relay` (and add `--approve-token/--approve-amount` if the flow needs an ERC20 approval). **Standard**: use `invoke` or `approve-and-invoke`. If the accept function requires Twitter binding (`userId`/`bindingSignature`), complete Twitter binding first — see `references/twitter-binding.md`. Report the accept transaction via `synctx report-tx`.
 5. **Fulfill task obligations**: Complete the work as required by the contract.
-6. **On-chain operations**: Query `status(dealIndex)` and `dealStatus(dealIndex)`, then follow `instruction()` to determine the correct role-specific action. Use `gelato-relay` for writes when gasless is available.
+6. **On-chain operations**: Query `phase(dealIndex)` and `dealStatus(dealIndex)`, then follow `instruction()` to determine the correct role-specific action. Use `gelato-relay` for writes when gasless is available.
 7. **Wait for counterparty**: Poll `synctx get-messages --json` or check `dealStatus`.
 8. **Verifier involvement** (if needed): Execute `requestVerification` (use `gelato-relay` when gasless) then notify the verifier.
 9. **Timeout handling**: When the counterparty times out, follow the contract's own timeout rules from `instruction()` and any exposed read helpers before acting.
@@ -157,16 +157,15 @@ Do not use `relay-check`, `relay`, or `relay-with-permit` here; those belong to 
 ### 5.3 Deal Interpretation Rules
 
 - Treat each DealContract as self-describing. Read `instruction()` first before interpreting business state codes or deciding the next action.
-- `status(dealIndex)` returns the universal lifecycle phase (same values across all DealContracts):
+- `phase(dealIndex)` returns the universal lifecycle phase (same values across all DealContracts, defined in `IDeal.sol`):
   - `0 = NotFound`
-  - `1 = Active` (includes newly created deals awaiting counterparty acceptance)
-  - `2 = Success`
-  - `3 = Failed` (includes on-chain `Refunding` state — the platform maps both to Failed)
-  - `4 = Refunding` (on-chain only; CLI commands `list-deals` / `get-deal` return this as `3 = Failed`)
-  - `5 = Cancelled`
-  **Note**: On-chain `status()` may return `4 = Refunding`, but CLI commands always map it to `3 = Failed`. When checking deal state via CLI, treat `3` as covering both Failed and Refunding. Use on-chain `status()` directly if you need to distinguish them.
-- `dealStatus(dealIndex)` returns a contract-specific business status code. Do **not** assume fixed meanings for numeric values across different DealContracts.
-- If `dealStatus(dealIndex)` depends on caller identity, always use your own address as `from` when making the read call.
+  - `1 = Pending` (created but not yet active, e.g. awaiting counterparty acceptance; some contracts skip this and go directly to Active)
+  - `2 = Active` (deal is in progress)
+  - `3 = Success`
+  - `4 = Failed`
+  - `5 = Cancelled` (only reachable from Pending; after Active, only Success or Failed)
+  **Note**: CLI commands `list-deals` / `get-deal` return a platform-level `status` field with **different numbering** (1=Active, 2=Success, 3=Failed, 5=Cancelled). When checking deal state via CLI, use these mapped values. When reading on-chain, call `phase()` directly.
+- `dealStatus(dealIndex)` returns a contract-specific business status code, independent of `msg.sender`. Do **not** assume fixed meanings for numeric values across different DealContracts — read `instruction()` for the status action guide.
 - If the contract exposes additional read helpers for deadlines, timeouts, verification parameters, or next actions, query them before acting.
 - If next-step logic remains ambiguous, re-read `instruction()` and inspect the contract interface or source instead of guessing based on prior DealContracts.
 

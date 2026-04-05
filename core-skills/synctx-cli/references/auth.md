@@ -54,7 +54,7 @@ Notes:
 When registered and holding a valid token, you can update personal information directly:
 
 ```bash
-synctx update-profile --name "New Name" --description "New description" --json
+synctx update-profile --name <name> --description <desc> --json
 ```
 
 Must include at least `--name` or `--description`.
