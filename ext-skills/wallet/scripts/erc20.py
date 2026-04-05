@@ -3,7 +3,7 @@ from __future__ import annotations
 from abi import call, invoke
 from wallet import address, fmt
 
-def balance(token: str, owner: str | None = None, *, chain_id: int = 10) -> dict:
+def balance(token: str, owner: str | None = None, *, chain_id: int = 8453) -> dict:
     if owner is None:
         owner = address()
     raw = call(token, "balanceOf(address)->(uint256)", [owner], chain_id=chain_id)
@@ -12,7 +12,7 @@ def balance(token: str, owner: str | None = None, *, chain_id: int = 10) -> dict
     return {"raw": str(raw), "formatted": fmt(raw, decimals, symbol),
             "symbol": symbol, "decimals": decimals}
 
-def approve(token: str, spender: str, amount: str | int, *, chain_id: int = 10) -> dict | None:
+def approve(token: str, spender: str, amount: str | int, *, chain_id: int = 8453) -> dict | None:
     owner = address()
     allowance = call(token, "allowance(address,address)->(uint256)", [owner, spender], chain_id=chain_id)
     if int(allowance) >= int(amount):
@@ -22,7 +22,7 @@ def approve(token: str, spender: str, amount: str | int, *, chain_id: int = 10) 
 def approve_and_invoke(
     token: str, contract: str, amount: str | int,
     sig: str, args: list[str] | None = None,
-    *, chain_id: int = 10, value: int = 0
+    *, chain_id: int = 8453, value: int = 0
 ) -> dict:
     approve(token, contract, amount, chain_id=chain_id)
     return invoke(contract, sig, args, chain_id=chain_id, value=value)

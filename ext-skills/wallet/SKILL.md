@@ -109,20 +109,23 @@ uv run scripts/run.py approve 0x...token... 0x...spender... 1000000 --chain 8453
 uv run scripts/run.py approve-and-invoke 0x...token... 0x...contract... 1000000 "createDeal(...)" --args '[...]' --chain 8453
 ```
 
-### Gasless Relay (Meta-Transactions)
+### Gasless Relay (Gelato 7702 Turbo)
 
 ```bash
-# Check if relay is available for a contract
-uv run scripts/run.py relay-check 0x...contract... --chain 8453
+# Gasless contract write (user signs, Gelato pays gas, msg.sender = user EOA)
+uv run scripts/run.py gelato-relay 0x...contract... "accept(uint256)" --args '["3"]' --chain 8453
 
-# Gasless contract write (replaces invoke — user signs, relayer pays gas)
-uv run scripts/run.py relay 0x...contract... "accept(uint256)" --args '["3"]' --chain 8453
+# Gasless approve + write in one atomic batch (no separate approve tx needed)
+uv run scripts/run.py gelato-relay 0x...contract... "createDeal(...)" --args '[...]' --approve-token 0x...USDC... --approve-amount 1000000 --chain 8453
 
-# Gasless approve + write (replaces approve-and-invoke — two signatures, zero gas)
-uv run scripts/run.py relay-with-permit 0x...token... 0x...contract... 1000000 "createDeal(...)" --args '[...]' --chain 8453
+# Gasless write and wait for the final receipt in one call
+uv run scripts/run.py gelato-relay 0x...contract... "accept(uint256)" --args '["3"]' --chain 8453 --sync --timeout 30000
+
+# Check relay task status
+uv run scripts/run.py gelato-status 0xtask_id...
 ```
 
-> **When to use relay vs invoke**: If `relay-check` returns `available: true`, prefer `relay` over `invoke` — the user pays zero gas. If relay is unavailable (relayer down, vault empty), fall back to `invoke`.
+> **When to use gelato-relay vs invoke**: On production chains (OP/Base/Arb/ETH), prefer `gelato-relay` — the user pays zero gas. On local Anvil, use `invoke` (Gelato does not support local chains). Use `--approve-token` + `--approve-amount` to batch approve + business call atomically.
 
 ### Signing
 

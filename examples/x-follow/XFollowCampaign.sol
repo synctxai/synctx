@@ -5,7 +5,6 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./XFollowVerifierSpec.sol";
 import "./IERC20.sol";
-import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 
 
@@ -15,7 +14,7 @@ import "./BindingAttestation.sol";
 ///         Each B's claim() creates a new dealIndex. Fully automated, no negotiation needed.
 /// @dev Lifecycle: OPEN → CLOSED
 ///      No constructor — all state is set via initialize() in one call (clone compatible).
-contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
+contract XFollowCampaign is DealBase {
 
     /// @dev Lock implementation against initialize() — clones are unaffected.
     constructor() {
@@ -131,13 +130,6 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     mapping(address => uint8) public failCount;
     mapping(address => uint256) internal pendingClaimIndex;  // B → current pending dealIndex
 
-    // ===================== BySig TYPEHASH Constants =====================
-
-    bytes32 private constant _CLAIM_TYPEHASH = keccak256(
-        "ClaimBySig(uint64 userId,bytes32 bindingSigHash,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
     // ===================== Modifiers =====================
 
     modifier onlyA() {
@@ -179,9 +171,6 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
         _lock = 1; // clone storage starts at 0; set to 1 for 1/2 reentrancy pattern
-
-        // MetaTxMixin initialization (clone path)
-        _initMetaTxDomain("XFollowCampaign", "1");
 
         // Config
         feeToken = feeToken_;
@@ -225,36 +214,19 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
     /// @param userId B's Twitter immutable user_id
     /// @param bindingSig Platform-issued binding attestation signature
     function claim(uint64 userId, bytes calldata bindingSig) external nonReentrant returns (uint256 dealIndex) {
-        return _claimCore(msg.sender, userId, bindingSig);
-    }
-
-    /// @notice B claims follow reward (gasless BySig version)
-    function claimBySig(uint64 userId, bytes calldata bindingSig, MetaTxProof calldata proof)
-        external nonReentrant returns (uint256 dealIndex)
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _CLAIM_TYPEHASH,
-            userId, keccak256(bindingSig),
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        return _claimCore(proof.signer, userId, bindingSig);
-    }
-
-    function _claimCore(address sender, uint64 userId, bytes calldata bindingSig) internal returns (uint256 dealIndex) {
         // Check and possibly trigger auto-close
         _checkAndClose();
         if (campaignStatus != OPEN) revert CampaignNotOpen();
 
-        if (claimedAddress[sender]) revert AlreadyClaimed();
+        if (claimedAddress[msg.sender]) revert AlreadyClaimed();
         if (claimedUserId[userId] != 0) revert AlreadyClaimed();
-        if (failCount[sender] >= MAX_FAILURES) revert MaxFailures();
+        if (failCount[msg.sender] >= MAX_FAILURES) revert MaxFailures();
 
         // Check for pending claim
-        if (_hasPendingClaim(sender)) revert PendingClaim();
+        if (_hasPendingClaim(msg.sender)) revert PendingClaim();
 
         // Verify Binding Attestation
-        if (!bindingAttestation.verify(sender, userId, bindingSig)) revert InvalidBindingSignature();
+        if (!bindingAttestation.verify(msg.sender, userId, bindingSig)) revert InvalidBindingSignature();
         uint64 followerUserId = userId;
 
         uint96 cost = _claimCost();
@@ -273,19 +245,19 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
         // Create claim (= dealIndex)
         {
             address[] memory traders = new address[](1);
-            traders[0] = sender;
+            traders[0] = msg.sender;
             address[] memory verifiers = new address[](1);
             verifiers[0] = verifier;
             dealIndex = _recordStart(traders, verifiers);
         }
 
         claims[dealIndex] = Claim({
-            claimer: sender,
+            claimer: msg.sender,
             timestamp: uint48(block.timestamp),
             status: VERIFYING,
             follower_user_id: followerUserId
         });
-        pendingClaimIndex[sender] = dealIndex;
+        pendingClaimIndex[msg.sender] = dealIndex;
         claimedUserId[followerUserId] = 1;
         pendingClaims++;
 
@@ -612,9 +584,6 @@ contract XFollowCampaign is DealBase, MetaTxMixin("", "") {
             "## Withdrawing Remaining Budget (A)\n\n"
             "1. Campaign must be CLOSED (A can call `closeCampaign()` at any time, or auto-triggered on deadline/budget exhaustion)\n"
             "2. If pending claims exist, wait for verification timeout (30 min), then call `resetVerification(dealIndex, 0)` for each\n"
-            "3. Once `pendingClaims == 0`, call `withdrawRemaining()` to reclaim budget\n\n"
-            "## Gasless Relay\n\n"
-            "claim() optionally supports gasless relay via `claimBySig` (EIP-712 meta-transaction). "
-            "The user signs, a relayer submits on-chain and pays gas.\n";
+            "3. Once `pendingClaims == 0`, call `withdrawRemaining()` to reclaim budget\n";
     }
 }

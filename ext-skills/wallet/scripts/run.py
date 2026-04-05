@@ -31,9 +31,8 @@ Commands:
   sign-typed-data      EIP-712 typed data signing
   decode-logs          Parse transaction event logs
   decode-revert        Decode revert error data
-  relay                Gasless contract write via meta-tx relayer
-  relay-with-permit    Gasless approve + write via relayer (EIP-2612)
-  relay-check          Check if gasless relay is available
+  gelato-relay         Gasless contract write via Gelato 7702 Turbo
+  gelato-status        Query Gelato relay task status
   to-raw               Human amount -> raw integer
   fmt                  Raw integer -> human readable
 """
@@ -41,6 +40,7 @@ Commands:
 import sys, os, subprocess, json, argparse
 
 DEPS = ["web3>=7.0,<8", "eth-abi>=5.0,<6", "httpx>=0.27", "python-dotenv>=1.0"]
+DEFAULT_CHAIN_ID = 8453
 
 def _ensure_deps():
     try:
@@ -149,20 +149,19 @@ def cmd_all_balances(_args):
     from wallet import all_balances
     _out(all_balances())
 
-def cmd_relay(args):
-    from relay import relay
+def cmd_gelato_relay(args):
+    from gelato import gelato_relay
     parsed_args = json.loads(args.args) if args.args else None
-    _out(relay(args.contract, args.sig, parsed_args, chain_id=args.chain))
+    _out(gelato_relay(args.contract, args.sig, parsed_args,
+                      chain_id=args.chain,
+                      approve_token=args.approve_token,
+                      approve_amount=int(args.approve_amount) if args.approve_amount else 0,
+                      sync=args.sync,
+                      timeout_ms=args.timeout))
 
-def cmd_relay_with_permit(args):
-    from relay import relay_with_permit
-    parsed_args = json.loads(args.args) if args.args else None
-    _out(relay_with_permit(args.token, args.contract, int(args.amount),
-                           args.sig, parsed_args, chain_id=args.chain))
-
-def cmd_relay_check(args):
-    from relay import relay_check
-    _out(relay_check(args.contract, chain_id=args.chain))
+def cmd_gelato_status(args):
+    from gelato import get_relay_status
+    _out(get_relay_status(args.task_id))
 
 def cmd_to_raw(args):
     from wallet import to_raw
@@ -183,25 +182,25 @@ def main():
 
     # eth-balance
     p = sub.add_parser("eth-balance", help="Native token balance")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
 
     # balance (erc20)
     p = sub.add_parser("balance", help="ERC20 token balance")
     p.add_argument("token", help="Token contract address")
     p.add_argument("--owner", help="Owner address (default: current wallet)")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
 
     # list-functions
     p = sub.add_parser("list-functions", help="List contract functions")
     p.add_argument("contract", help="Contract address or ABI file path")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
 
     # call
     p = sub.add_parser("call", help="Read contract state (view/pure)")
     p.add_argument("contract", help="Contract address")
     p.add_argument("sig", help="Function signature, e.g. 'balanceOf(address)->(uint256)'")
     p.add_argument("--args", help="JSON array of arguments", default="[]")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
     p.add_argument("--from", dest="from_addr", help="Simulate msg.sender")
 
     # invoke
@@ -209,7 +208,7 @@ def main():
     p.add_argument("contract", help="Contract address")
     p.add_argument("sig", help="Function signature")
     p.add_argument("--args", help="JSON array of arguments", default="[]")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
     p.add_argument("--value", type=int, default=0, help="ETH value in wei")
     p.add_argument("--dry-run", action="store_true",
                    help="Estimate gas and show tx details without executing")
@@ -219,7 +218,7 @@ def main():
     p.add_argument("token", help="Token contract address")
     p.add_argument("spender", help="Spender address")
     p.add_argument("amount", help="Amount in raw units")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
 
     # approve-and-invoke
     p = sub.add_parser("approve-and-invoke", help="Approve + contract call in one step")
@@ -228,7 +227,7 @@ def main():
     p.add_argument("amount", help="Approve amount in raw units")
     p.add_argument("sig", help="Function signature to invoke")
     p.add_argument("--args", help="JSON array of arguments", default="[]")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
     p.add_argument("--value", type=int, default=0)
 
     # sign-message
@@ -243,13 +242,13 @@ def main():
     p = sub.add_parser("decode-logs", help="Parse transaction event logs")
     p.add_argument("tx_hash", help="Transaction hash")
     p.add_argument("contract", help="Contract address (for ABI)")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
 
     # decode-revert
     p = sub.add_parser("decode-revert", help="Decode revert error data")
     p.add_argument("data", help="Hex error data")
     p.add_argument("--contract", help="Contract address (for custom errors)")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
 
     # check-wallet
     sub.add_parser("check-wallet", help="Check wallet configuration status")
@@ -260,26 +259,22 @@ def main():
     # all-balances
     sub.add_parser("all-balances", help="ETH + USDC balances across all chains")
 
-    # relay
-    p = sub.add_parser("relay", help="Gasless contract write via relayer (meta-tx)")
+    # gelato-relay
+    p = sub.add_parser("gelato-relay", help="Gasless contract write via Gelato 7702 Turbo")
     p.add_argument("contract", help="Contract address")
     p.add_argument("sig", help="Function signature")
     p.add_argument("--args", help="JSON array of arguments", default="[]")
-    p.add_argument("--chain", type=int, default=10)
+    p.add_argument("--chain", type=int, default=DEFAULT_CHAIN_ID)
+    p.add_argument("--approve-token", help="ERC20 token to approve (batch with call)")
+    p.add_argument("--approve-amount", help="Approve amount in raw units", default="0")
+    p.add_argument("--sync", action="store_true",
+                   help="Wait for the final receipt via relayer_sendTransactionSync")
+    p.add_argument("--timeout", type=int, default=30000,
+                   help="Max sync wait time in milliseconds (default: 30000)")
 
-    # relay-with-permit
-    p = sub.add_parser("relay-with-permit", help="Gasless approve + contract write via relayer")
-    p.add_argument("token", help="ERC20 token address")
-    p.add_argument("contract", help="Contract to invoke")
-    p.add_argument("amount", help="Approve amount in raw units")
-    p.add_argument("sig", help="Function signature to invoke")
-    p.add_argument("--args", help="JSON array of arguments", default="[]")
-    p.add_argument("--chain", type=int, default=10)
-
-    # relay-check
-    p = sub.add_parser("relay-check", help="Check if gasless relay is available for a contract")
-    p.add_argument("contract", help="Contract address")
-    p.add_argument("--chain", type=int, default=10)
+    # gelato-status
+    p = sub.add_parser("gelato-status", help="Query Gelato relay task status")
+    p.add_argument("task_id", help="Gelato task ID")
 
     # to-raw
     p = sub.add_parser("to-raw", help="Human amount -> raw integer")
@@ -304,8 +299,7 @@ def main():
         "check-wallet": cmd_check_wallet, "generate-wallet": cmd_generate_wallet,
         "all-balances": cmd_all_balances,
         "approve": cmd_approve, "approve-and-invoke": cmd_approve_and_invoke,
-        "relay": cmd_relay, "relay-with-permit": cmd_relay_with_permit,
-        "relay-check": cmd_relay_check,
+        "gelato-relay": cmd_gelato_relay, "gelato-status": cmd_gelato_status,
         "sign-message": cmd_sign_message, "sign-typed-data": cmd_sign_typed_data,
         "decode-logs": cmd_decode_logs, "decode-revert": cmd_decode_revert,
         "to-raw": cmd_to_raw, "fmt": cmd_fmt,

@@ -5,7 +5,6 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
-import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 import "./Clones.sol";
 import "./XFollowCampaign.sol";
@@ -16,7 +15,7 @@ import "./XFollowCampaign.sol";
 ///         Each clone is an independent campaign with parameters locked at creation.
 /// @dev Factory's dealIndex counts campaigns.
 ///      Sub-contract's dealIndex counts claims.
-contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory", "1") {
+contract XFollowFactory is DealBase, Initializable {
 
     // ===================== Errors =====================
 
@@ -67,15 +66,6 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
     /// @notice Factory dealIndex → campaign address
     mapping(uint256 => address) public campaigns;
 
-    // ===================== BySig TYPEHASH Constants =====================
-
-    bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
-        "CreateDealBySig(uint96 grossAmount,address verifier,uint96 verifierFee,"
-        "uint96 rewardPerFollow,uint256 sigDeadline,bytes32 sigHash,"
-        "uint64 target_user_id,uint48 campaignDeadline,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
     // ===================== Constructor =====================
 
     constructor(
@@ -122,45 +112,6 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         uint64  target_user_id_,
         uint48  deadline_
     ) external nonReentrant returns (address campaign) {
-        return _createDealCore(msg.sender, grossAmount, verifier_, verifierFee_, rewardPerFollow_, sigDeadline, sig, target_user_id_, deadline_);
-    }
-
-    /// @notice A creates a new XFollowCampaign (gasless BySig version)
-    function createDealBySig(
-        uint96  grossAmount,
-        address verifier_,
-        uint96  verifierFee_,
-        uint96  rewardPerFollow_,
-        uint256 sigDeadline,
-        bytes calldata sig,
-        uint64  target_user_id_,
-        uint48  deadline_,
-        PermitData calldata permit,
-        MetaTxProof calldata proof
-    ) external nonReentrant returns (address campaign) {
-        bytes32 structHash = keccak256(abi.encode(
-            _CREATE_DEAL_TYPEHASH,
-            grossAmount, verifier_, verifierFee_,
-            rewardPerFollow_, sigDeadline, keccak256(sig),
-            target_user_id_, deadline_,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _executePermit(permit, proof.signer);
-        return _createDealCore(proof.signer, grossAmount, verifier_, verifierFee_, rewardPerFollow_, sigDeadline, sig, target_user_id_, deadline_);
-    }
-
-    function _createDealCore(
-        address sender,
-        uint96  grossAmount,
-        address verifier_,
-        uint96  verifierFee_,
-        uint96  rewardPerFollow_,
-        uint256 sigDeadline,
-        bytes calldata sig,
-        uint64  target_user_id_,
-        uint48  deadline_
-    ) internal returns (address campaign) {
         if (feeToken == address(0)) revert FeeTokenNotSet();
 
         // Basic validation (detailed validation done by campaign.initialize)
@@ -170,7 +121,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
         campaign = Clones.clone(IMPLEMENTATION);
 
         // 2. Transfer USDC from A to campaign
-        if (!IERC20(feeToken).transferFrom(sender, campaign, grossAmount)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(msg.sender, campaign, grossAmount)) revert TransferFailed();
 
         // 3. Initialize clone
         XFollowCampaign(campaign).initialize(
@@ -179,7 +130,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
             PROTOCOL_FEE,
             REQUIRED_SPEC,
             address(BINDING_ATTESTATION),
-            sender,             // partyA
+            msg.sender,         // partyA
             verifier_,
             rewardPerFollow_,
             verifierFee_,
@@ -192,7 +143,7 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
 
         // 4. Record in factory (dealIndex = campaign sequence number)
         address[] memory traders = new address[](1);
-        traders[0] = sender;
+        traders[0] = msg.sender;
         address[] memory verifiers = new address[](1);
         verifiers[0] = verifier_;
         uint256 campaignIndex = _recordStart(traders, verifiers);
@@ -296,9 +247,6 @@ contract XFollowFactory is DealBase, Initializable, MetaTxMixin("XFollowFactory"
             "| Code | Status | Meaning |\n"
             "|----|------|------|\n"
             "| 1 | Created | Campaign deployed and live |\n"
-            "| 255 | NotFound | No campaign at this index |\n\n"
-            "## Gasless Relay\n\n"
-            "createDeal optionally supports gasless relay via `createDealBySig` (EIP-712 meta-transaction). "
-            "The user signs, a relayer submits on-chain and pays gas.\n";
+            "| 255 | NotFound | No campaign at this index |\n";
     }
 }

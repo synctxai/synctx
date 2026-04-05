@@ -52,7 +52,8 @@ Automatic argument type conversion:
 All CLI commands output JSON to stdout; diagnostics go to stderr.
 
 Common options:
-- `--chain <id>` — Chain ID. **Always use `--chain 8453` (Base) unless the user specifies another chain.** CLI code default is 10 but the project default is Base 8453.
+- `--chain <id>` — Chain ID. **Always use `--chain 8453` (Base) unless the user specifies another chain.** CLI and project default are Base 8453.
+- `gelato-relay --sync --timeout <ms>` — Wait for the final receipt via `relayer_sendTransactionSync` instead of returning only a task ID.
 - `--args '<json_array>'` — Function arguments as JSON array, e.g. `'["0x...", "1000"]'`
 - `--dry-run` — Estimate gas only, do not execute (`invoke` command only)
 - `--help` — Show command help

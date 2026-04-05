@@ -6,7 +6,6 @@ import "./IVerifier.sol";
 import "./XQuoteVerifierSpec.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
-import "./MetaTxMixin.sol";
 import "./BindingAttestation.sol";
 
 
@@ -21,7 +20,7 @@ import "./BindingAttestation.sol";
 ///      3. B quotes the tweet on X, then calls claimDone to submit quote_tweet_id
 ///      4. A manually confirms payment, or requests Verifier auto-verification
 ///      5. If verification is inconclusive or Verifier times out, enters settlement phase
-contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal", "1") {
+contract XQuoteDealContract is DealBase, Initializable {
 
     // ===================== Errors =====================
 
@@ -141,45 +140,6 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
     mapping(uint256 => Settlement) internal settlementByA;
     mapping(uint256 => Settlement) internal settlementByB;
 
-    // ===================== BySig TYPEHASH Constants =====================
-
-    bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
-        "CreateDealBySig(address partyB,uint96 grossAmount,address verifier,"
-        "uint96 verifierFee,uint256 verifierDeadline,bytes32 verifierSigHash,"
-        "string tweet_id,uint64 quoterUserId,bytes32 bindingSigHash,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _ACCEPT_TYPEHASH = keccak256(
-        "AcceptBySig(uint256 dealIndex,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _CLAIM_DONE_TYPEHASH = keccak256(
-        "ClaimDoneBySig(uint256 dealIndex,string quote_tweet_id,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _CONFIRM_AND_PAY_TYPEHASH = keccak256(
-        "ConfirmAndPayBySig(uint256 dealIndex,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _REQUEST_VERIFICATION_TYPEHASH = keccak256(
-        "RequestVerificationBySig(uint256 dealIndex,uint256 verificationIndex,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _PROPOSE_SETTLEMENT_TYPEHASH = keccak256(
-        "ProposeSettlementBySig(uint256 dealIndex,uint96 amountToA,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _CONFIRM_SETTLEMENT_TYPEHASH = keccak256(
-        "ConfirmSettlementBySig(uint256 dealIndex,uint256 expectedVersion,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
     // ===================== Modifiers =====================
 
     modifier onlyA(uint256 dealIndex) {
@@ -246,56 +206,15 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         uint64  quoterUserId,
         bytes calldata bindingSig
     ) external nonReentrant returns (uint256 dealIndex) {
-        return _createDealCore(msg.sender, partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoterUserId, bindingSig);
-    }
-
-    /// @notice Create deal (gasless BySig version)
-    function createDealBySig(
-        address partyB,
-        uint96  grossAmount,
-        address verifier,
-        uint96  verifierFee,
-        uint256 verifierDeadline,
-        bytes calldata sig,
-        string calldata tweet_id,
-        uint64  quoterUserId,
-        bytes calldata bindingSig,
-        PermitData calldata permit,
-        MetaTxProof calldata proof
-    ) external nonReentrant returns (uint256 dealIndex) {
-        bytes32 structHash = keccak256(abi.encode(
-            _CREATE_DEAL_TYPEHASH,
-            partyB, grossAmount, verifier,
-            verifierFee, verifierDeadline, keccak256(sig),
-            keccak256(bytes(tweet_id)), quoterUserId, keccak256(bindingSig),
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _executePermit(permit, proof.signer);
-        return _createDealCore(proof.signer, partyB, grossAmount, verifier, verifierFee, verifierDeadline, sig, tweet_id, quoterUserId, bindingSig);
-    }
-
-    function _createDealCore(
-        address sender,
-        address partyB,
-        uint96  grossAmount,
-        address verifier,
-        uint96  verifierFee,
-        uint256 deadline,
-        bytes calldata sig,
-        string calldata tweet_id,
-        uint64  quoterUserId,
-        bytes calldata bindingSig
-    ) internal returns (uint256 dealIndex) {
         // --- Validation ---
         if (feeToken == address(0)) revert FeeTokenNotSet();
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
         if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
         if (partyB == address(0)) revert InvalidParams();
-        if (sender == partyB) revert InvalidParams();
+        if (msg.sender == partyB) revert InvalidParams();
 
         if (verifier == address(0)) revert InvalidParams();
-        if (sender == verifier || partyB == verifier) revert InvalidParams();
+        if (msg.sender == verifier || partyB == verifier) revert InvalidParams();
         if (verifier.code.length == 0) revert VerifierNotContract();
         if (sig.length == 0) revert InvalidVerifierSignature();
         if (deadline < block.timestamp) revert SignatureExpired();
@@ -308,12 +227,12 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         _verifyVerifierSignature(verifier, tweet_id, quoterUserId, verifierFee, deadline, sig);
 
         // --- Transfer USDC to escrow ---
-        if (!IERC20(feeToken).transferFrom(sender, address(this), grossAmount)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
 
         // --- Create deal record ---
         {
             address[] memory traders = new address[](2);
-            traders[0] = sender;
+            traders[0] = msg.sender;
             traders[1] = partyB;
             address[] memory verifiers = new address[](1);
             verifiers[0] = verifier;
@@ -322,7 +241,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
 
         {
             Deal storage d = deals[dealIndex];
-            d.partyA = sender;
+            d.partyA = msg.sender;
             d.partyB = partyB;
             d.verifier = verifier;
             d.amount = grossAmount - PROTOCOL_FEE;
@@ -345,26 +264,8 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         external
         nonReentrant
     {
-        _acceptCore(msg.sender, dealIndex);
-    }
-
-    /// @notice B accepts the deal (gasless BySig version)
-    function acceptBySig(uint256 dealIndex, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _ACCEPT_TYPEHASH,
-            dealIndex,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _acceptCore(proof.signer, dealIndex);
-    }
-
-    function _acceptCore(address sender, uint256 dealIndex) internal {
         Deal storage d = deals[dealIndex];
-        if (sender != d.partyB) revert NotPartyB();
+        if (msg.sender != d.partyB) revert NotPartyB();
         if (d.status != WAITING_ACCEPT) revert InvalidStatus();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
@@ -383,27 +284,8 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         external
         nonReentrant
     {
-        _claimDoneCore(msg.sender, dealIndex, quote_tweet_id);
-    }
-
-    /// @notice B declares the quote is done (gasless BySig version)
-    function claimDoneBySig(uint256 dealIndex, string calldata quote_tweet_id, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _CLAIM_DONE_TYPEHASH,
-            dealIndex,
-            keccak256(bytes(quote_tweet_id)),
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _claimDoneCore(proof.signer, dealIndex, quote_tweet_id);
-    }
-
-    function _claimDoneCore(address sender, uint256 dealIndex, string calldata quote_tweet_id) internal {
         Deal storage d = deals[dealIndex];
-        if (sender != d.partyB) revert NotPartyB();
+        if (msg.sender != d.partyB) revert NotPartyB();
         if (d.status != WAITING_CLAIM) revert InvalidStatus();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
@@ -421,26 +303,8 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         external
         nonReentrant
     {
-        _confirmAndPayCore(msg.sender, dealIndex);
-    }
-
-    /// @notice A manually confirms and pays B (gasless BySig version)
-    function confirmAndPayBySig(uint256 dealIndex, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _CONFIRM_AND_PAY_TYPEHASH,
-            dealIndex,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _confirmAndPayCore(proof.signer, dealIndex);
-    }
-
-    function _confirmAndPayCore(address sender, uint256 dealIndex) internal {
         Deal storage d = deals[dealIndex];
-        if (sender != d.partyA) revert NotPartyA();
+        if (msg.sender != d.partyA) revert NotPartyA();
         if (d.status != WAITING_CONFIRM) revert InvalidStatus();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
@@ -486,30 +350,11 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         nonReentrant
         override
     {
-        _requestVerificationCore(msg.sender, dealIndex, verificationIndex);
-    }
-
-    /// @notice Trader triggers verification (gasless BySig version)
-    function requestVerificationBySig(uint256 dealIndex, uint256 verificationIndex, PermitData calldata permit, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _REQUEST_VERIFICATION_TYPEHASH,
-            dealIndex, verificationIndex,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _executePermit(permit, proof.signer);
-        _requestVerificationCore(proof.signer, dealIndex, verificationIndex);
-    }
-
-    function _requestVerificationCore(address sender, uint256 dealIndex, uint256 verificationIndex) internal {
         if (verificationIndex != 0) revert InvalidVerificationIndex();
 
         Deal storage d = deals[dealIndex];
         if (d.status != WAITING_CONFIRM) revert InvalidStatus();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
         uint96 fee = d.verifierFee;
@@ -517,12 +362,12 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
 
         // CEI: state changes first
         d.status = VERIFYING;
-        d.isRequesterA = (sender == d.partyA);
+        d.isRequesterA = (msg.sender == d.partyA);
         d.verificationTimestamp = uint48(block.timestamp);
 
         emit VerificationRequested(dealIndex, verificationIndex, verifier);
 
-        if (!IERC20(feeToken).transferFrom(sender, address(this), fee)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
     }
 
     /// @notice Verifier submits verification result
@@ -623,46 +468,28 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         external
         nonReentrant
     {
-        _proposeSettlementCore(msg.sender, dealIndex, amountToA);
-    }
-
-    /// @notice Propose settlement (gasless BySig version)
-    function proposeSettlementBySig(uint256 dealIndex, uint96 amountToA, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _PROPOSE_SETTLEMENT_TYPEHASH,
-            dealIndex, amountToA,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _proposeSettlementCore(proof.signer, dealIndex, amountToA);
-    }
-
-    function _proposeSettlementCore(address sender, uint256 dealIndex, uint96 amountToA) internal {
         Deal storage d = deals[dealIndex];
         if (d.status != SETTLING) revert InvalidStatus();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
         if (amountToA > d.amount) revert InvalidSettlement();
 
         uint256 newVersion;
-        if (sender == d.partyA) {
+        if (msg.sender == d.partyA) {
             Settlement storage s = settlementByA[dealIndex];
-            s.proposer = sender;
+            s.proposer = msg.sender;
             s.amountToA = amountToA;
             s.version += 1;
             newVersion = s.version;
         } else {
             Settlement storage s = settlementByB[dealIndex];
-            s.proposer = sender;
+            s.proposer = msg.sender;
             s.amountToA = amountToA;
             s.version += 1;
             newVersion = s.version;
         }
 
-        emit SettlementProposed(dealIndex, sender, amountToA, newVersion);
+        emit SettlementProposed(dealIndex, msg.sender, amountToA, newVersion);
     }
 
     /// @notice Confirm counterparty's settlement proposal
@@ -672,30 +499,12 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
         external
         nonReentrant
     {
-        _confirmSettlementCore(msg.sender, dealIndex, expectedVersion);
-    }
-
-    /// @notice Confirm counterparty's settlement proposal (gasless BySig version)
-    function confirmSettlementBySig(uint256 dealIndex, uint256 expectedVersion, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _CONFIRM_SETTLEMENT_TYPEHASH,
-            dealIndex, expectedVersion,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _confirmSettlementCore(proof.signer, dealIndex, expectedVersion);
-    }
-
-    function _confirmSettlementCore(address sender, uint256 dealIndex, uint256 expectedVersion) internal {
         Deal storage d = deals[dealIndex];
         if (d.status != SETTLING) revert InvalidStatus();
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
 
         // Get counterparty's proposal
-        Settlement storage stl = (sender == d.partyA) ? settlementByB[dealIndex] : settlementByA[dealIndex];
+        Settlement storage stl = (msg.sender == d.partyA) ? settlementByB[dealIndex] : settlementByA[dealIndex];
         if (stl.proposer == address(0)) revert InvalidSettlement();
         if (stl.version != expectedVersion) revert VersionMismatch();
 
@@ -1008,10 +817,7 @@ contract XQuoteDealContract is DealBase, Initializable, MetaTxMixin("XQuoteDeal"
             "> 1. `requestVerification(dealIndex, 0)`\n"
             "> 2. **Must** notify the verifier to begin verification\n"
             "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
-            "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. Call `settlement(dealIndex)` to query proposals and their version numbers. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the counterparty's version from `settlement()` as expectedVersion.\n\n"
-            "## Gasless Relay\n\n"
-            "All primary write operations optionally support gasless relay via `BySig` variants (EIP-712 meta-transaction). "
-            "The user signs, a relayer submits on-chain and pays gas.\n";
+            "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. Call `settlement(dealIndex)` to query proposals and their version numbers. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the counterparty's version from `settlement()` as expectedVersion.\n";
     }
 
     // ===================== Status Query =====================

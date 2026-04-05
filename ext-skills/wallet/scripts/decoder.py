@@ -6,7 +6,7 @@ from eth_abi.exceptions import DecodingError
 from chains import get_w3
 from abi import _load, _serialize
 
-def decode_revert(error_data: str, contract_address: str | None = None, *, chain_id: int = 10) -> str:
+def decode_revert(error_data: str, contract_address: str | None = None, *, chain_id: int = 8453) -> str:
     data = bytes.fromhex(error_data.removeprefix("0x"))
     # Error(string)
     if data[:4] == bytes.fromhex("08c379a2"):
@@ -39,7 +39,7 @@ def decode_revert(error_data: str, contract_address: str | None = None, *, chain
         except Exception: pass
     return f"Unknown error: 0x{data.hex()}"
 
-def decode_logs(tx_hash: str, contract_address: str, *, chain_id: int = 10) -> list[dict]:
+def decode_logs(tx_hash: str, contract_address: str, *, chain_id: int = 8453) -> list[dict]:
     w3 = get_w3(chain_id)
     receipt = w3.eth.get_transaction_receipt(tx_hash)
     abi = _load(contract_address, chain_id=chain_id)

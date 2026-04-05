@@ -7,9 +7,9 @@ from web3 import Web3
 from eth_account.messages import encode_defunct, encode_typed_data
 
 try:
-    from .chains import CHAINS, get_w3, get_account
+    from .chains import CHAINS, DEFAULT_CHAIN_ID, get_w3, get_account
 except ImportError:
-    from chains import CHAINS, get_w3, get_account
+    from chains import CHAINS, DEFAULT_CHAIN_ID, get_w3, get_account
 
 
 # (amount, decimals) -> int  Human-readable amount → on-chain raw integer. e.g. to_raw(1.5, 18) → 1500000000000000000
@@ -26,7 +26,7 @@ def address() -> str:
     return get_account().address
 
 # (chain_id) -> {address, chain_id, balance_raw, balance}  Queries native token balance on the specified chain
-def eth_balance(chain_id: int = 10) -> dict:
+def eth_balance(chain_id: int = DEFAULT_CHAIN_ID) -> dict:
     w3, account = get_w3(chain_id), get_account()
     bal = w3.eth.get_balance(account.address)
     return {"address": account.address, "chain_id": chain_id,
@@ -89,7 +89,7 @@ def all_balances() -> dict:
 
 # --- Internal transaction helpers (not exposed to agent) ---
 
-def _build_tx(to: str, chain_id: int = 10, value: int = 0, data: bytes | str = b"") -> dict:
+def _build_tx(to: str, chain_id: int = DEFAULT_CHAIN_ID, value: int = 0, data: bytes | str = b"") -> dict:
     """Construct EIP-1559 transaction dict (without gas estimate)."""
     if isinstance(data, str):
         data = bytes.fromhex(data.removeprefix("0x"))
@@ -105,7 +105,7 @@ def _build_tx(to: str, chain_id: int = 10, value: int = 0, data: bytes | str = b
     }
 
 def _estimate_gas(to: str, sig: str, args: list | None, *,
-                  chain_id: int = 10, value: int = 0) -> dict:
+                  chain_id: int = DEFAULT_CHAIN_ID, value: int = 0) -> dict:
     """Dry-run: estimate gas and return tx preview without sending."""
     from abi import _invoke as _encode
     calldata = _encode(sig, args)
@@ -131,7 +131,7 @@ def _estimate_gas(to: str, sig: str, args: list | None, *,
         "estimated_cost_eth": round(gas * tx["maxFeePerGas"] / 1e18, 8),
     }
 
-def _send_tx(to: str, chain_id: int = 10, value: int = 0, data: bytes | str = b"") -> dict:
+def _send_tx(to: str, chain_id: int = DEFAULT_CHAIN_ID, value: int = 0, data: bytes | str = b"") -> dict:
     """Send EIP-1559 transaction. Internal only — use abi.invoke()."""
     tx = _build_tx(to, chain_id=chain_id, value=value, data=data)
     w3, account = get_w3(chain_id), get_account()

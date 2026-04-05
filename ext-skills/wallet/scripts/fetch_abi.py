@@ -13,7 +13,7 @@ def _cache_path(address: str, chain_id: int) -> Path:
     return _SKILL_DIR / "abis" / f"{address.lower()}.json"
 
 # (address, chain_id) -> str  Fetch ABI from Sourcify/Etherscan, cache locally, return path to ABI JSON file
-def fetch_abi(address: str, chain_id: int = 10) -> str:
+def fetch_abi(address: str, chain_id: int = 8453) -> str:
     cached = _cache_path(address, chain_id)
     if cached.exists():
         return str(cached)

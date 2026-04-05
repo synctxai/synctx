@@ -17,6 +17,8 @@ _DEFAULT_RPC = {
 
 # Chain config table: keys are chain_id, values contain rpc endpoint, display name, native token symbol
 # RPC can be overridden via CHAIN_RPC_<chainId> env var (e.g. CHAIN_RPC_8453=http://localhost:8547)
+DEFAULT_CHAIN_ID = 8453
+
 CHAINS = {
     1:     {"rpc": os.environ.get("CHAIN_RPC_1",     _DEFAULT_RPC[1]),     "name": "Ethereum",     "symbol": "ETH"},
     10:    {"rpc": os.environ.get("CHAIN_RPC_10",    _DEFAULT_RPC[10]),    "name": "Optimism",     "symbol": "ETH"},
@@ -25,7 +27,7 @@ CHAINS = {
 }
 
 # (chain_id) -> Web3  Returns a Web3 instance for the specified chain, no private key required
-def get_w3(chain_id: int = 10) -> Web3:
+def get_w3(chain_id: int = DEFAULT_CHAIN_ID) -> Web3:
     return Web3(Web3.HTTPProvider(CHAINS[chain_id]["rpc"]))
 
 # () -> LocalAccount  Derives local account from PRIVATE_KEY in .env, purely local with no RPC connection

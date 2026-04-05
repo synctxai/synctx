@@ -1,6 +1,6 @@
 # X Follow Campaign — 工厂 + Clone 设计
 
-> 开发者部署工厂合约，A 通过工厂创建 campaign（免 gas），B 在子合约中领取关注奖励（免 gas）。三方激励模型：开发者靠每次 claim 的手续费获利，A 不用懂合约即可获得粉丝，B 关注即赚钱无需支付 gas。
+> 开发者部署工厂合约，A 通过工厂创建 campaign，B 在子合约中领取关注奖励。免 gas 体验由外部 Gelato 7702 Turbo 提供（非合约层面）。三方激励模型：开发者靠每次 claim 的手续费获利，A 不用懂合约即可获得粉丝，B 关注即赚钱无需支付 gas。
 
 ---
 
@@ -10,7 +10,7 @@
 
 | 角色 | 做什么 | 收益 |
 |------|--------|------|
-| **开发者** | 部署工厂 + implementation，设定 protocolFee，预充 relayer vault | 每次 claim 收手续费 |
+| **开发者** | 部署工厂 + implementation，设定 protocolFee，充值 Gelato Gas Tank | 每次 claim 收手续费 |
 | **A（Campaign 创建者）** | 在工厂调 createDeal()，存入预算 | 无需部署合约或支付 gas |
 | **B（关注者）** | 在 X 上关注目标账号，在子合约调 claim() | 赚取固定 USDC 奖励，零 gas 成本 |
 
@@ -21,7 +21,7 @@ XFollowFactory（开发者部署一次）
   │  ├── implementation: XFollowCampaign（逻辑合约）
   │  ├── protocolFee, feeCollector（→ 开发者）
   │  ├── requiredSpec, platformSigner（共享配置）
-  │  └── GasSponsorVault 为 A + B 的 gasless 交易提供 gas（开发者预充）
+  │  └── 免 gas 由 Gelato 7702 Turbo 提供（开发者充值 Gelato Gas Tank）
   │
   ├── createDeal() → Clones.clone(impl) + initialize()
   │     └── XFollowCampaign（子合约 1，A₁ 的 campaign）
@@ -38,7 +38,7 @@ XFollowFactory（开发者部署一次）
 
 - **继承链：** `XFollowFactory` 与 `XFollowCampaign` 都是完整的 `IDeal → DealBase` 合约；factory 负责入口与索引，child 负责实际 campaign 执行
 - **Clone 模式：** EIP-1167 最小代理。所有子合约共享 implementation 字节码，各自有独立 storage
-- **Gasless：** 合约通过 MetaTxMixin 提供 BySig 函数（createDealBySig、claimBySig 等），Relayer 代提交上链。Gas 由开发者的 GasSponsorVault 支付
+- **Gasless：** 由外部 Gelato 7702 Turbo relay 处理。合约仅暴露普通直接调用函数（无 BySig 函数）。Gas 由开发者的 Gelato Gas Tank 赞助
 - **生命周期：** `createDeal()` → 子合约直接进入 OPEN（无 TESTING 阶段）
 - **自动注册：** 工厂 emit `SubContractCreated(address subContract)` → 平台监听工厂事件 → 自动发现并注册子合约
 - **身份：** Binding Attestation（platformSigner 验签）为 B 的强制要求
@@ -136,14 +136,14 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
 | `constructor(impl, feeCollector, protocolFee, spec, bindingAttestation)` | 开发者 | 部署工厂，设置共享配置 |
-| `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A（免 gas） | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
+| `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A | Clone impl → initialize → 转 USDC 到子合约 → emit SubContractCreated。返回子合约地址 |
 
 ### 3.2 XFollowCampaign 函数
 
 | 方法 | 调用者 | 说明 |
 |------|--------|------|
 | `initialize(...)` | 仅工厂 | 设置 campaign 参数并立即进入 OPEN。仅可调用一次，仅工厂可调 |
-| `claim(userId, bindingSig)` | 任何 B（免 gas） | 验证 Binding Attestation。从预算锁定 claimCost。发出 VerificationRequested。返回 dealIndex |
+| `claim(userId, bindingSig)` | 任何 B | 验证 Binding Attestation。从预算锁定 claimCost。发出 VerificationRequested。返回 dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → 付款给 B；result<0 → 奖励+协议费退回预算，failCount++；result==0 → 全额退回预算 |
 | `resetVerification(dealIndex, 0)` | 任何人 | VERIFICATION_TIMEOUT 后。全额 claimCost 退回预算。verifierTimeoutCount++，emit VerifierTimeout |
 | `withdrawRemaining()` | A | CLOSED 且 pendingClaims==0 时。budget → A |
@@ -229,10 +229,10 @@ sequenceDiagram
     Note over Dev: 一次性设置
     Dev->>Dev: 部署 XFollowCampaign（implementation）
     Dev->>Dev: 部署 XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, bindingAttestation)
-    Dev->>Dev: 部署 GasSponsorVault 并充值 gas 费用
+    Dev->>Dev: 充值 Gelato Gas Tank 用于免 gas relay
     Dev->>P: 在平台注册工厂
 
-    Note over A,Fac: Campaign 创建（通过 relayer 免 gas）
+    Note over A,Fac: Campaign 创建（通过 Gelato 7702 免 gas）
 
     A->>P: 🟣 request_sign(verifier, {target_user_id}, deadline)
     P-->>V: 异步消息
@@ -245,7 +245,7 @@ sequenceDiagram
     Note over P: 平台监听工厂事件<br/>→ 自动注册子合约
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
-    Note over B,C: 领取阶段（通过 relayer 免 gas）
+    Note over B,C: 领取阶段（通过 Gelato 7702 免 gas）
 
     Note over B: 1. 完成 Twitter 认证，获取 Binding Attestation
     Note over B: 2. 在 X 上关注 target_user_id
@@ -369,29 +369,29 @@ budget < claimCost       → 自动关闭 → CLOSED
 
 ```
 开发者部署：
-  1. GasSponsorVault（gas 赞助金库）
-  2. XFollowCampaign implementation（含 MetaTxMixin）
-  3. XFollowFactory(impl, feeCollector, protocolFee, spec, bindingAttestation)
-  4. 为 GasSponsorVault 充值（gas 预算）
+  1. XFollowCampaign implementation（普通直接调用，无 BySig 函数）
+  2. XFollowFactory(impl, feeCollector, protocolFee, spec, bindingAttestation)
+  3. 充值 Gelato Gas Tank（Gelato 7702 Turbo relay 的 gas 预算）
 
-合约通过 MetaTxMixin 内嵌 EIP-712 签名验证和 nonce 管理，无需外部 forwarder。
+免 gas 完全在合约层之外由 Gelato 7702 Turbo 处理。
+合约仅暴露标准函数；Gelato 代用户 relay 交易。
 ```
 
 ### 7.2 谁支付 Gas
 
 | 操作 | Tx 发送者 | Gas 由谁支付 |
 |------|----------|-------------|
-| A: createDeal | Relayer（meta-tx） | 开发者的 vault |
-| B: claim | Relayer（meta-tx） | 开发者的 vault |
+| A: createDeal | Gelato 7702 relay | 开发者的 Gelato Gas Tank |
+| B: claim | Gelato 7702 relay | 开发者的 Gelato Gas Tank |
 | B: notify_verifier | 平台 MCP 调用 | 无 gas（链下） |
 | Verifier: reportResult | Verifier signer EOA | Verifier（自有 gas） |
-| A: withdrawRemaining | Relayer（meta-tx） | 开发者的 vault |
+| A: withdrawRemaining | Gelato 7702 relay | 开发者的 Gelato Gas Tank |
 
 ### 7.3 经济模型
 
 ```
 开发者每次 claim 收入 = PROTOCOL_FEE
-开发者每次 claim 成本 = B 的 claim() meta-tx gas + A 的摊销创建成本
+开发者每次 claim 成本 = B 的 claim() relay gas + A 的摊销创建成本
 净利润              = PROTOCOL_FEE - gas 成本
 ```
 

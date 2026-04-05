@@ -1,6 +1,6 @@
 # X Follow Campaign — Factory + Clone Design
 
-> Developer deploys a factory, A creates campaigns via the factory (gasless), B claims follow rewards in child contracts (gasless). Three-party incentive model: developer profits from per-claim protocol fee, A gets followers without understanding contracts, B earns by following without paying gas.
+> Developer deploys a factory, A creates campaigns via the factory, B claims follow rewards in child contracts. Gasless experience is provided externally via Gelato 7702 Turbo (not at the contract level). Three-party incentive model: developer profits from per-claim protocol fee, A gets followers without understanding contracts, B earns by following without paying gas.
 
 ---
 
@@ -10,7 +10,7 @@
 
 | Role | What they do | Incentive |
 |------|-------------|-----------|
-| **Developer** | Deploy factory + implementation, set protocolFee, fund relayer vault | Earn protocolFee per claim |
+| **Developer** | Deploy factory + implementation, set protocolFee, fund Gelato Gas Tank | Earn protocolFee per claim |
 | **A (Campaign Creator)** | Call factory.createDeal() with budget, get followers | No need to deploy contracts or pay gas |
 | **B (Follower)** | Follow target on X, call claim() on child contract | Earn fixed USDC reward, zero gas cost |
 
@@ -21,7 +21,7 @@ XFollowFactory (developer deploys once)
   │  ├── implementation: XFollowCampaign (logic contract)
   │  ├── protocolFee, feeCollector (→ developer)
   │  ├── requiredSpec, platformSigner (shared config)
-  │  └── GasSponsorVault funds gas for A + B (developer pre-funded)
+  │  └── Gasless via Gelato 7702 Turbo (developer funds Gelato Gas Tank)
   │
   ├── createDeal() → Clones.clone(impl) + initialize()
   │     └── XFollowCampaign (child 1, A₁'s campaign)
@@ -38,7 +38,7 @@ XFollowFactory (developer deploys once)
 
 - **Inheritance:** both `XFollowFactory` and `XFollowCampaign` are full `IDeal → DealBase` contracts; factory is the parent entry/index, child is the executable campaign
 - **Clone pattern:** EIP-1167 minimal proxy. All children share implementation bytecode, each has own storage
-- **Gasless:** Contracts use MetaTxMixin for BySig functions (createDealBySig, claimBySig, etc.), relayer submits on-chain. Gas paid from developer's GasSponsorVault
+- **Gasless:** Handled externally via Gelato 7702 Turbo relay. Contracts use plain direct calls (no BySig functions). Gas sponsored by developer's Gelato Gas Tank
 - **Lifecycle:** `createDeal()` → child enters OPEN immediately (no TESTING phase)
 - **Auto-registration:** Factory emits `SubContractCreated(address subContract)` → platform monitors factory events → auto-discovers and registers child contracts
 - **Identity:** Binding Attestation (platformSigner verification) mandatory for B
@@ -136,14 +136,14 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | Method | Caller | Description |
 |--------|--------|-------------|
 | `constructor(impl, feeCollector, protocolFee, spec, bindingAttestation)` | Developer | Deploy factory with all shared config |
-| `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A (gasless) | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
+| `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
 
 ### 3.2 XFollowCampaign Functions
 
 | Method | Caller | Description |
 |--------|--------|-------------|
 | `initialize(...)` | Factory only | Set campaign params and enter OPEN immediately. Can only be called once, only by factory |
-| `claim(userId, bindingSig)` | Any B (gasless) | Verify Binding Attestation. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
+| `claim(userId, bindingSig)` | Any B | Verify Binding Attestation. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → pay B; result<0 → reward to budget, failCount++; result==0 → all to budget |
 | `resetVerification(dealIndex, 0)` | Anyone | After VERIFICATION_TIMEOUT. Full claimCost returns to budget. verifierTimeoutCount++, emit VerifierTimeout event |
 | `withdrawRemaining()` | A | Only when CLOSED + pendingClaims==0. Budget → A |
@@ -229,10 +229,10 @@ sequenceDiagram
     Note over Dev: One-time setup
     Dev->>Dev: Deploy XFollowCampaign (implementation)
     Dev->>Dev: Deploy XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, bindingAttestation)
-    Dev->>Dev: Deploy GasSponsorVault and fund gas budget
+    Dev->>Dev: Fund Gelato Gas Tank for gasless relay
     Dev->>P: Register factory on platform
 
-    Note over A,Fac: Campaign Creation (gasless via relayer)
+    Note over A,Fac: Campaign Creation (gasless via Gelato 7702)
 
     A->>P: 🟣 request_sign(verifier, {target_user_id}, deadline)
     P-->>V: async message
@@ -245,7 +245,7 @@ sequenceDiagram
     Note over P: Platform monitors factory events<br/>→ auto-register child contract
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
-    Note over B,C: Claim Phase (gasless via relayer)
+    Note over B,C: Claim Phase (gasless via Gelato 7702)
 
     Note over B: 1. Complete Twitter verification, get Binding Attestation
     Note over B: 2. Follow target_user_id on X
@@ -369,29 +369,29 @@ otherwise                → eligible
 
 ```
 Developer deploys:
-  1. GasSponsorVault (gas sponsorship vault)
-  2. XFollowCampaign implementation (with MetaTxMixin)
-  3. XFollowFactory(impl, feeCollector, protocolFee, spec, bindingAttestation)
-  4. Fund GasSponsorVault (gas budget)
+  1. XFollowCampaign implementation (plain direct calls, no BySig functions)
+  2. XFollowFactory(impl, feeCollector, protocolFee, spec, bindingAttestation)
+  3. Fund Gelato Gas Tank (gas budget for Gelato 7702 Turbo relay)
 
-Contracts embed MetaTxMixin for EIP-712 signature verification and nonce management; no external forwarder needed.
+Gasless is handled entirely outside the contract layer via Gelato 7702 Turbo.
+Contracts expose only standard functions; Gelato relays transactions on behalf of users.
 ```
 
 ### 7.2 Who Pays Gas
 
 | Action | Tx Sender | Gas Paid By |
 |--------|-----------|-------------|
-| A: createDeal | Relayer (meta-tx) | Developer's vault |
-| B: claim | Relayer (meta-tx) | Developer's vault |
+| A: createDeal | Gelato 7702 relay | Developer's Gelato Gas Tank |
+| B: claim | Gelato 7702 relay | Developer's Gelato Gas Tank |
 | B: notify_verifier | Platform MCP call | No gas (off-chain) |
 | Verifier: reportResult | Verifier signer EOA | Verifier (has own gas) |
-| A: withdrawRemaining | Relayer (meta-tx) | Developer's vault |
+| A: withdrawRemaining | Gelato 7702 relay | Developer's Gelato Gas Tank |
 
 ### 7.3 Economic Model
 
 ```
 Developer revenue per claim = PROTOCOL_FEE
-Developer cost per claim     = gas for B's claim() meta-tx + gas for A's amortized creation cost
+Developer cost per claim     = gas for B's claim() relay + gas for A's amortized creation cost
 Net margin                   = PROTOCOL_FEE - gas costs
 ```
 

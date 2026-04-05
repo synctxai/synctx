@@ -5,7 +5,6 @@ import "../../contracts/DealBase.sol";
 import "../../contracts/IVerifier.sol";
 import "../../contracts/IERC20.sol";
 import "../../contracts/Initializable.sol";
-import "../../contracts/MetaTxMixin.sol";
 import "../european-option-verifier-spec/SettlementPriceVerifierSpec.sol";
 
 interface IERC20MetadataLike {
@@ -27,7 +26,7 @@ interface ISettlementPriceVerifierLike {
 ///      3. After expiry, either party can request price verification
 ///      4. Verifier submits settlement price, contract auto-settles based on option type
 ///      5. If verification fails/inconclusive, enters Settling for manual negotiation; unwind on timeout
-contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("EuropeanOptionDeal", "1") {
+contract EuropeanOptionDealContract is DealBase, Initializable {
 
     error FeeTokenNotSet();
     error InvalidParams();
@@ -137,36 +136,6 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
     mapping(uint256 => Deal) internal deals;
     mapping(uint256 => SettlementProposal) internal settlements;
 
-    // ===================== BySig TYPEHASH Constants =====================
-
-    bytes32 private constant _CREATE_DEAL_TYPEHASH = keccak256(
-        "CreateDealBySig(address writer,address underlying,uint8 optionType,"
-        "uint256 quantity,uint256 strike,uint256 premium,uint48 expiry,"
-        "uint32 settlementWindow,address verifier,uint96 verifierFee,"
-        "uint256 verifierDeadline,bytes32 verifierSigHash,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _ACCEPT_TYPEHASH = keccak256(
-        "AcceptBySig(uint256 dealIndex,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _REQUEST_VERIFICATION_TYPEHASH = keccak256(
-        "RequestVerificationBySig(uint256 dealIndex,uint256 verificationIndex,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _PROPOSE_SETTLEMENT_TYPEHASH = keccak256(
-        "ProposeSettlementBySig(uint256 dealIndex,uint256 amountToHolder,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
-    bytes32 private constant _CONFIRM_SETTLEMENT_TYPEHASH = keccak256(
-        "ConfirmSettlementBySig(uint256 dealIndex,uint256 expectedVersion,"
-        "address signer,address relayer,uint256 nonce,uint256 deadline)"
-    );
-
     // ===================== Modifiers =====================
 
     modifier nonReentrant() {
@@ -219,32 +188,9 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
     // ===================== createDeal =====================
 
     function createDeal(CreateDealParams calldata p) external nonReentrant returns (uint256 dealIndex) {
-        return _createDealCore(msg.sender, p);
-    }
-
-    /// @notice Create deal (gasless BySig version)
-    function createDealBySig(CreateDealParams calldata p, PermitData calldata permit, MetaTxProof calldata proof)
-        external
-        nonReentrant
-        returns (uint256 dealIndex)
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _CREATE_DEAL_TYPEHASH,
-            p.writer, p.underlying, p.optionType,
-            p.quantity, p.strike, p.premium, p.expiry,
-            p.settlementWindow, p.verifier, p.verifierFee,
-            p.verifierDeadline, keccak256(p.verifierSig),
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _executePermit(permit, proof.signer);
-        return _createDealCore(proof.signer, p);
-    }
-
-    function _createDealCore(address sender, CreateDealParams calldata p) internal returns (uint256 dealIndex) {
         if (_serviceMode == MODE_CLOSED) revert ContractNotOpen();
         if (feeToken == address(0)) revert FeeTokenNotSet();
-        if (p.writer == address(0) || p.writer == sender || p.verifier == address(0) || p.underlying == address(0)) {
+        if (p.writer == address(0) || p.writer == msg.sender || p.verifier == address(0) || p.underlying == address(0)) {
             revert InvalidParams();
         }
         if (p.underlying == feeToken) revert InvalidParams();
@@ -267,11 +213,11 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
             p.verifierSig
         );
 
-        if (!IERC20(feeToken).transferFrom(sender, address(this), p.premium)) revert TransferFailed();
+        if (!IERC20(feeToken).transferFrom(msg.sender, address(this), p.premium)) revert TransferFailed();
 
         {
             address[] memory traders = new address[](2);
-            traders[0] = sender;
+            traders[0] = msg.sender;
             traders[1] = p.writer;
             address[] memory verifiers = new address[](1);
             verifiers[0] = p.verifier;
@@ -279,7 +225,7 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         }
 
         Deal storage d = deals[dealIndex];
-        d.holder = sender;
+        d.holder = msg.sender;
         d.writer = p.writer;
         d.underlying = p.underlying;
         d.verifier = p.verifier;
@@ -301,34 +247,15 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
     // ===================== accept =====================
 
     function accept(uint256 dealIndex) external nonReentrant {
-        _acceptCore(msg.sender, dealIndex);
-    }
-
-    /// @notice Writer accepts deal (gasless BySig version)
-    function acceptBySig(uint256 dealIndex, PermitData calldata permit, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _ACCEPT_TYPEHASH,
-            dealIndex,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _executePermit(permit, proof.signer);
-        _acceptCore(proof.signer, dealIndex);
-    }
-
-    function _acceptCore(address sender, uint256 dealIndex) internal {
         Deal storage d = deals[dealIndex];
-        if (sender != d.writer) revert NotWriter();
+        if (msg.sender != d.writer) revert NotWriter();
         if (d.status != WAITING_ACCEPT) revert InvalidStatus();
         if (_isAcceptTimedOut(d)) revert AlreadyTimedOut();
 
         uint256 collateral = _requiredCollateral(d.optionType, d.quantity, d.strike);
         address collateralToken = _collateralAsset(d);
 
-        if (!IERC20(collateralToken).transferFrom(sender, address(this), collateral)) revert TransferFailed();
+        if (!IERC20(collateralToken).transferFrom(msg.sender, address(this), collateral)) revert TransferFailed();
 
         d.reservedCollateral = collateral;
         d.status = ACTIVE;
@@ -364,34 +291,10 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
         override
         nonReentrant
     {
-        _requestVerificationCore(msg.sender, dealIndex, verificationIndex);
-    }
-
-    /// @notice Request verification (gasless BySig version)
-    function requestVerificationBySig(
-        uint256 dealIndex,
-        uint256 verificationIndex,
-        PermitData calldata permit,
-        MetaTxProof calldata proof
-    )
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _REQUEST_VERIFICATION_TYPEHASH,
-            dealIndex, verificationIndex,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _executePermit(permit, proof.signer);
-        _requestVerificationCore(proof.signer, dealIndex, verificationIndex);
-    }
-
-    function _requestVerificationCore(address sender, uint256 dealIndex, uint256 verificationIndex) internal {
         if (verificationIndex != 0) revert InvalidVerificationIndex();
 
         Deal storage d = deals[dealIndex];
-        if (sender != d.holder && sender != d.writer) revert NotParty();
+        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
         if (d.status != ACTIVE) revert InvalidStatus();
         if (block.timestamp < uint256(d.expiry)) revert InvalidStatus();
 
@@ -399,12 +302,12 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
 
         d.status = VERIFYING;
         d.verificationTimestamp = uint48(block.timestamp);
-        d.requesterIsHolder = (sender == d.holder);
+        d.requesterIsHolder = (msg.sender == d.holder);
 
         emit VerificationRequested(dealIndex, verificationIndex, d.verifier);
 
         if (fee > 0) {
-            if (!IERC20(feeToken).transferFrom(sender, address(this), fee)) revert TransferFailed();
+            if (!IERC20(feeToken).transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
         }
     }
 
@@ -484,67 +387,31 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
     // ===================== proposeSettlement =====================
 
     function proposeSettlement(uint256 dealIndex, uint256 amountToHolder) external nonReentrant {
-        _proposeSettlementCore(msg.sender, dealIndex, amountToHolder);
-    }
-
-    /// @notice Propose settlement (gasless BySig version)
-    function proposeSettlementBySig(uint256 dealIndex, uint256 amountToHolder, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _PROPOSE_SETTLEMENT_TYPEHASH,
-            dealIndex, amountToHolder,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _proposeSettlementCore(proof.signer, dealIndex, amountToHolder);
-    }
-
-    function _proposeSettlementCore(address sender, uint256 dealIndex, uint256 amountToHolder) internal {
         Deal storage d = deals[dealIndex];
-        if (sender != d.holder && sender != d.writer) revert NotParty();
+        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (_isSettlingTimedOut(d)) revert AlreadyTimedOut();
         if (amountToHolder > d.reservedCollateral) revert InvalidSettlement();
 
         SettlementProposal storage stl = settlements[dealIndex];
-        stl.proposer = sender;
+        stl.proposer = msg.sender;
         stl.amountToHolder = amountToHolder;
         stl.version += 1;
 
-        emit SettlementProposed(dealIndex, sender, amountToHolder, stl.version);
+        emit SettlementProposed(dealIndex, msg.sender, amountToHolder, stl.version);
     }
 
     // ===================== confirmSettlement =====================
 
     function confirmSettlement(uint256 dealIndex, uint256 expectedVersion) external nonReentrant {
-        _confirmSettlementCore(msg.sender, dealIndex, expectedVersion);
-    }
-
-    /// @notice Confirm counterparty's settlement proposal (gasless BySig version)
-    function confirmSettlementBySig(uint256 dealIndex, uint256 expectedVersion, MetaTxProof calldata proof)
-        external
-        nonReentrant
-    {
-        bytes32 structHash = keccak256(abi.encode(
-            _CONFIRM_SETTLEMENT_TYPEHASH,
-            dealIndex, expectedVersion,
-            proof.signer, proof.relayer, proof.nonce, proof.deadline
-        ));
-        _verifyMetaTx(structHash, proof);
-        _confirmSettlementCore(proof.signer, dealIndex, expectedVersion);
-    }
-
-    function _confirmSettlementCore(address sender, uint256 dealIndex, uint256 expectedVersion) internal {
         Deal storage d = deals[dealIndex];
         SettlementProposal storage stl = settlements[dealIndex];
-        if (sender != d.holder && sender != d.writer) revert NotParty();
+        if (msg.sender != d.holder && msg.sender != d.writer) revert NotParty();
         if (d.status != SETTLING) revert InvalidStatus();
         if (_isSettlingTimedOut(d)) revert SettlementTimedOut();
         if (stl.proposer == address(0)) revert InvalidSettlement();
         if (stl.version != expectedVersion) revert VersionMismatch();
-        if (sender == stl.proposer) revert ProposerCannotConfirm();
+        if (msg.sender == stl.proposer) revert ProposerCannotConfirm();
 
         _executeSettlement(
             dealIndex,
@@ -885,9 +752,6 @@ contract EuropeanOptionDealContract is DealBase, Initializable, MetaTxMixin("Eur
             "| 6 | Unwound | -- (premium returned to Holder, collateral to Writer) | -- |\n"
             "| 255 | NotFound | Deal does not exist | Deal does not exist |\n\n"
             "> **Timeouts**: Accept = 1 day, Verification = 1 day, Settlement = 3 days.\n\n"
-            "> **Settlement semantics**: `proposeSettlement(dealIndex, amountToHolder)` where amountToHolder is denominated in the collateral asset. Remainder goes to Writer. Call `settlement(dealIndex)` to query the current proposal and its version. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the version from `settlement()` as expectedVersion.\n\n"
-            "## Gasless Relay\n\n"
-            "All primary write operations optionally support gasless relay via `BySig` variants (EIP-712 meta-transaction). "
-            "The user signs, a relayer submits on-chain and pays gas.\n";
+            "> **Settlement semantics**: `proposeSettlement(dealIndex, amountToHolder)` where amountToHolder is denominated in the collateral asset. Remainder goes to Writer. Call `settlement(dealIndex)` to query the current proposal and its version. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the version from `settlement()` as expectedVersion.\n";
     }
 }

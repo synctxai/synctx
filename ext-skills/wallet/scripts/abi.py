@@ -22,7 +22,7 @@ except ImportError:
     from fetch_abi import fetch_abi
 
 # (path_or_address) -> list[dict]  Load ABI JSON; bare filenames resolved relative to scripts/ then abis/; contract addresses auto-fetched
-def _load(path: str, chain_id: int = 10) -> list[dict]:
+def _load(path: str, chain_id: int = 8453) -> list[dict]:
     p = Path(path)
     if not p.is_absolute() and not p.exists():
         p = _SCRIPT_DIR / path
@@ -75,7 +75,7 @@ def _serialize(value: Any) -> Any:
     return value
 
 # (abi_json) -> {read: [sig, ...], write: [sig, ...]}  Parse ABI JSON file; sigs can be passed directly to call/invoke
-def list_functions(abi_json: str, chain_id: int = 10) -> dict[str, list[str]]:
+def list_functions(abi_json: str, chain_id: int = 8453) -> dict[str, list[str]]:
     read_fns, write_fns = [], []
     for item in _load(abi_json, chain_id=chain_id):
         if item.get("type") != "function":
@@ -89,7 +89,7 @@ def list_functions(abi_json: str, chain_id: int = 10) -> dict[str, list[str]]:
     return {"read": read_fns, "write": write_fns}
 
 # (address, sig, args, chain_id) -> Any  Call a read-only contract function (view/pure), no private key needed, return value auto-serialized
-def call(address: str, sig: str, args: list[str] | None = None, *, chain_id: int = 10, from_address: str | None = None) -> Any:
+def call(address: str, sig: str, args: list[str] | None = None, *, chain_id: int = 8453, from_address: str | None = None) -> Any:
     canon, in_types, out_types = _parse_sig(sig)
     selector = Web3.keccak(text=canon)[:4]
     converted = [_convert_arg(a, t) for a, t in zip(args or [], in_types)]
@@ -111,6 +111,6 @@ def _invoke(sig: str, args: list[str] | None = None) -> bytes:
     return selector + encode(in_types, converted) if converted else selector
 
 # (address, sig, args, chain_id, value) -> receipt  Call a write function and send the transaction, returns standard EVM transaction receipt
-def invoke(address: str, sig: str, args: list[str] | None = None, *, chain_id: int = 10, value: int = 0) -> dict:
+def invoke(address: str, sig: str, args: list[str] | None = None, *, chain_id: int = 8453, value: int = 0) -> dict:
     data = _invoke(sig, args)
     return _send_tx(address, chain_id=chain_id, value=value, data=data)
