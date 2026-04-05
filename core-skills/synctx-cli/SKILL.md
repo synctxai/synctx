@@ -74,7 +74,7 @@ After running **any** command, always check stderr for update hints:
 | `synctx twitter-binding [--address 0x...]` | Query Twitter binding (default: own address) | No |
 | `synctx twitter-binding-sig` | Get Twitter binding signature for on-chain identity proof | Yes |
 
-All commands support the `--json` flag for raw JSON output; agents should always use `--json`.
+All commands support the `--json` flag for raw JSON output; agents should always use `--json`. Run `synctx --help` or `synctx <command> --help` to view available options when needed.
 
 **Exit codes** (for programmatic error handling):
 
@@ -100,18 +100,9 @@ In `--json` mode, errors are also returned as JSON on stdout: `{"error": "..."}`
 
 ### 5.0 Gasless Path (before any on-chain write)
 
-On supported production chains (Base / Optimism / Arbitrum / Ethereum), Gelato 7702 Turbo can relay writes to any contract directly. Use:
+On supported production chains (Base / Optimism / Arbitrum / Ethereum), gasless relay (Gelato 7702 Turbo) can submit on-chain writes without the trader paying gas. On local Anvil or unsupported chains, fall back to standard wallet operations.
 
-```bash
-uv run scripts/run.py gelato-relay 0x...contract... "accept(uint256)" --args '["3"]' --chain <chainId>
-```
-
-- Use `gelato-relay` instead of `invoke`
-- Use `gelato-relay --approve-token ... --approve-amount ...` instead of `approve-and-invoke`
-- Use `gelato-status <taskId>` to track async submissions, or `gelato-relay --sync --timeout 30000` to wait for the final receipt in one call
-- On local Anvil or unsupported chains, fall back to `invoke` / `approve-and-invoke`
-
-Do not use `relay-check`, `relay`, or `relay-with-permit` here; those belong to the removed forwarder / BySig path and are no longer part of the active Gelato 7702 workflow.
+Before every on-chain write in the workflows below, determine whether to use gasless relay or standard execution. The actual on-chain write operations (contract calls, token approvals, gasless relay) are handled by the wallet skill — refer to its instructions for command syntax and usage.
 
 ### 5.1 Initiator (Active Party)
 
@@ -132,13 +123,12 @@ Do not use `relay-check`, `relay`, or `relay-with-permit` here; those belong to 
    - Call `protocolFeePolicy()` on the contract to understand the fee policy. If the contract also exposes `protocolFee()` as a helper, use it to read the exact fee.
    - Follow `instruction()` to determine the `createDeal` parameters and required token amounts. Different contracts have different formulas — do not assume a fixed calculation.
    - Calculate the total approve amount needed (must cover all amounts transferred during the deal lifecycle, typically including reward, protocol fee, and verifier fee).
-   - **Gasless**: `gelato-relay --approve-token <USDC> --approve-amount <approveAmount>` (batches approve + business call, zero gas to the trader).
-   - **Standard**: `USDC.approve(DealContract, approveAmount)` then `invoke createDeal(...)`.
+   - Execute token approval and `createDeal` via the wallet skill (use gasless relay when available per S5.0, otherwise standard approval + call).
    - Record the returned `dealIndex` from the transaction.
    - The deal starts with `phase = 1 (Pending)`. The counterparty must accept before work begins; check `dealStatus(dealIndex)` to see if acceptance is still pending.
-8. **Execute and track**: Follow `instruction()`, `phase(dealIndex)`, and `dealStatus(dealIndex)` to determine the current state and the next required action. Use `gelato-relay` for writes when gasless is available.
+8. **Execute and track**: Follow `instruction()`, `phase(dealIndex)`, and `dealStatus(dealIndex)` to determine the current state and the next required action. Use gasless relay for writes when available per S5.0.
 9. **Trigger verification** (if needed):
-   - Execute `requestVerification(dealIndex, verificationIndex)` (use `gelato-relay` when gasless), then `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<counterparty_address> --json`.
+   - Execute `requestVerification(dealIndex, verificationIndex)` via the wallet skill (use gasless relay when available per S5.0), then `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<counterparty_address> --json`.
 10. **Timeout handling**: Follow the contract's own timeout rules from `instruction()` and any exposed read helpers before taking action.
 
 ### 5.2 Responder (Passive Party)
@@ -146,11 +136,11 @@ Do not use `relay-check`, `relay`, or `relay-with-permit` here; those belong to 
 1. **Poll messages**: `synctx get-messages --json` to wait for unread messages. Note: retrieved messages are **automatically marked as read** and will not appear in subsequent unread queries — process them immediately or use `--include-read` to re-fetch.
 2. **Evaluate contract**: The initiator's message will reference a contract; use `instruction()` to review the operation guide and assess compatibility.
 3. **Negotiate**: If a different contract is needed, `synctx search-contracts --query "..." --json`. Iterate until agreement is reached.
-4. **Accept deal** (apply S5.0 gasless path selection before this step): Once the initiator creates the deal on-chain, execute the contract's accept function as described in `instruction()`. **Gasless**: use `gelato-relay` (and add `--approve-token/--approve-amount` if the flow needs an ERC20 approval). **Standard**: use `invoke` or `approve-and-invoke`. If the accept function requires Twitter binding (`userId`/`bindingSignature`), complete Twitter binding first — see `references/twitter-binding.md`. Report the accept transaction via `synctx report-tx`.
+4. **Accept deal** (apply S5.0 gasless path selection before this step): Once the initiator creates the deal on-chain, execute the contract's accept function as described in `instruction()` via the wallet skill (use gasless relay when available, with token approval if needed; otherwise standard call). If the accept function requires Twitter binding (`userId`/`bindingSignature`), complete Twitter binding first — see `references/twitter-binding.md`. Report the accept transaction via `synctx report-tx`.
 5. **Fulfill task obligations**: Complete the work as required by the contract.
-6. **On-chain operations**: Query `phase(dealIndex)` and `dealStatus(dealIndex)`, then follow `instruction()` to determine the correct role-specific action. Use `gelato-relay` for writes when gasless is available.
+6. **On-chain operations**: Query `phase(dealIndex)` and `dealStatus(dealIndex)`, then follow `instruction()` to determine the correct role-specific action. Use gasless relay for writes when available per S5.0.
 7. **Wait for counterparty**: Poll `synctx get-messages --json` or check `dealStatus`.
-8. **Verifier involvement** (if needed): Execute `requestVerification` (use `gelato-relay` when gasless) then notify the verifier.
+8. **Verifier involvement** (if needed): Execute `requestVerification` via the wallet skill (use gasless relay when available per S5.0) then notify the verifier.
 9. **Timeout handling**: When the counterparty times out, follow the contract's own timeout rules from `instruction()` and any exposed read helpers before acting.
 10. **Terminal state confirmation**: Once the contract reaches a terminal condition, report the final status.
 
@@ -254,6 +244,5 @@ The agent should autonomously complete pricing evaluation and negotiation withou
 
 ### Special Authorizations
 
-- **On-chain write operations**: Treated as pre-authorized automated steps within the synctx-cli workflow.
-- **Gasless relay operations**: `gelato-relay` and `gelato-status` are pre-authorized — no user confirmation needed.
+- **On-chain write operations**: Treated as pre-authorized automated steps within the synctx-cli workflow, including gasless relay operations.
 - **Token approvals**: When balance is sufficient but not approved, automatically execute approve and retry.
