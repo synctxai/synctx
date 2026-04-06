@@ -537,7 +537,7 @@ contract XFollowCampaign is DealBase {
         return campaignStatus == OPEN ? MODE_OPENING : MODE_CLOSED;
     }
 
-    function instruction() external view override returns (string memory) {
+    function instruction() external pure override returns (string memory) {
         return
             "# X(Twitter) Follow Campaign\n\n"
             "Pay fixed USDC reward per follow to a target account on Twitter. 1-to-many campaign model.\n\n"

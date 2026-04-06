@@ -755,7 +755,7 @@ contract XQuoteDealContract is DealBase, Initializable {
 
     // ===================== Instruction =====================
 
-    function instruction() external view override returns (string memory) {
+    function instruction() external pure override returns (string memory) {
         return
             "# X Quote Tweet Deal\n\n"
             "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.\n\n"
