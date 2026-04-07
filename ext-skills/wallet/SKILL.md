@@ -1,16 +1,24 @@
 ---
 name: wallet-deno
 description: >-
-  Multi-chain EVM wallet. Use when the user needs to query balances, interact
-  with smart contracts, or sign messages.
+  Multi-chain EVM wallet — read contract state, send transactions, sign messages,
+  query token balances, and interact with any verified smart contract via ABI.
+  Use this skill when the task involves blockchain operations such as checking balances,
+  querying allowances, approving tokens, calling or invoking smart contracts,
+  signing messages (EIP-191/EIP-712), or sending on-chain transactions.
+  Also use when the user mentions wallet, ETH, USDC, token balance, contract calls,
+  DeFi, on-chain interaction, or transaction signing, even if they don't explicitly
+  say "wallet".
 license: MIT
 compatibility: Requires Deno 2.x+ and network access
 metadata:
   author: synctxai
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## On Load
+
+When this skill is first loaded, **immediately** run `check-wallet` before doing anything else.
 
 ```bash
 # 0. Check deno is available
@@ -19,17 +27,25 @@ if ! command -v deno &>/dev/null; then
   exit 4
 fi
 
-# 1. Check wallet status
 deno run -P scripts/run.ts check-wallet
-# If status is "no_env" or "no_key":
-deno run -P scripts/run.ts generate-wallet
-
-# 2. Show address
-deno run -P scripts/run.ts address
-
-# 3. Check balances
-deno run -P scripts/run.ts balance
 ```
+
+Based on the result:
+
+- `"status": "ok"` → Wallet is ready. Proceed with the user's request.
+- `"status": "no_env"`, `"no_key"`, or `"invalid_key"` → Automatically run `generate-wallet` to create a new wallet. Then tell the user:
+  - The new wallet address
+  - The private key storage location (`.env` file next to this SKILL.md)
+  - Run `balance` to show ETH + USDC balances across all chains
+  - If balances are insufficient, suggest the user transfer ETH (for gas) and USDC (for trading) to the wallet address
+
+> **Warning:** The private key is stored in a local `.env` file and is not production-grade secure. Only deposit minimal funds for testing.
+
+## Critical Constraints
+
+1. **NEVER write raw Deno/ethers code.** Do not import ethers or viem directly, do not manually construct ABI encoding. ALL contract interactions MUST go through the `run.ts` CLI commands.
+2. **NEVER fabricate data.** Addresses, amounts, function signatures — all must come from user input or on-chain queries. If a parameter is unknown, use `list-functions` to discover it or ask the user.
+3. **Write operations require user confirmation** (except when overridden by the SyncTx workflow's Special Authorizations). Follow the [Write Operation Workflow](#workflow-write-operations) below.
 
 ## Command Reference
 
@@ -54,9 +70,9 @@ deno run -P scripts/run.ts balance --token 0xTOKEN --chain 8453      # Specific 
 Function signature format: `name(inputTypes)->(outputTypes)`
 
 - `balanceOf(address)->(uint256)` — with return type
-- `createDeal(address,uint96,bytes32)` — write, no return
 - `name()->(string)` — no args
 - `approve(address,uint256)->(bool)` — bool return
+- `fn(address,uint96)` — write, no return type needed
 
 ```bash
 deno run -P scripts/run.ts read CONTRACT "balanceOf(address)->(uint256)" --args '["0xOwner"]' --chain 8453
@@ -76,12 +92,12 @@ When a call requires token approval, use `--approve TOKEN:AMOUNT`. In gasless mo
 
 ```bash
 # Gasless
-deno run -P scripts/run.ts send CONTRACT "accept(uint256)" --args '["42"]' --gasless gelato
+deno run -P scripts/run.ts send CONTRACT "fn(uint256)" --args '["42"]' --gasless gelato
 
 # Self-pay
-deno run -P scripts/run.ts send CONTRACT "accept(uint256)" --args '["42"]'
+deno run -P scripts/run.ts send CONTRACT "fn(uint256)" --args '["42"]'
 
-# With token approval (gasless, atomic)
+# With token approval (gasless, atomic) — approve + call batched via EIP-7702
 deno run -P scripts/run.ts send CONTRACT "createDeal(address,uint96)" \
   --args '["0x...", "1000000"]' \
   --approve 0xUSDC:1000000 --gasless gelato
@@ -95,7 +111,7 @@ deno run -P scripts/run.ts send CONTRACT "createDeal(address,uint96)" \
 deno run -P scripts/run.ts send CONTRACT "fn()" --dry-run
 
 # With ETH value (rare, self-pay only)
-deno run -P scripts/run.ts send CONTRACT "deposit()" --value 1000000000000000000
+deno run -P scripts/run.ts send CONTRACT "fn()" --value 1000000000000000000
 ```
 
 ### Signing
@@ -104,6 +120,27 @@ deno run -P scripts/run.ts send CONTRACT "deposit()" --value 1000000000000000000
 deno run -P scripts/run.ts sign "hello world"                                    # EIP-191
 deno run -P scripts/run.ts sign-typed '{"domain":{...},"types":{...},...}'       # EIP-712
 ```
+
+### ERC20 Pre-Call Check
+
+Before calling any contract method that moves tokens (e.g. `createDeal`), **always check the current allowance first**. If allowance < required amount, approve before sending.
+
+```bash
+# 1. Check current allowance
+deno run -P scripts/run.ts read TOKEN "allowance(address,address)->(uint256)" \
+  --args '["0xOwnerAddr","0xSpenderContract"]' --chain 8453
+
+# 2a. Gasless: --approve batches approve + call atomically (both revert if either fails)
+deno run -P scripts/run.ts send CONTRACT "createDeal(...)" --args '[...]' \
+  --approve 0xUSDC:AMOUNT --gasless gelato
+
+# 2b. Self-pay: two separate transactions
+deno run -P scripts/run.ts send TOKEN "approve(address,uint256)" \
+  --args '["0xSpenderContract","AMOUNT"]'
+deno run -P scripts/run.ts send CONTRACT "createDeal(...)" --args '[...]'
+```
+
+> **Rule**: Never send a token-consuming call without verifying allowance. In gasless mode, always use `--approve` to batch atomically. In self-pay mode, confirm the approve tx is mined before sending the business call.
 
 ### ABI Discovery & Decoding
 
@@ -120,6 +157,26 @@ deno run -P scripts/run.ts to-raw 1.5 --decimals 6          # → 1500000
 deno run -P scripts/run.ts fmt 1500000 --decimals 6 --symbol USDC  # → "1.5 USDC"
 deno run -P scripts/run.ts relay-status TASK_ID              # Check relay task status
 ```
+
+## Workflow: Unknown Contract Interaction
+
+1. `list-functions CONTRACT --chain 8453` → discover all function signatures
+2. Find the target function sig from output
+3. Read: `read addr "sig" --args [...]` / Write: `send addr "sig" --args [...]`
+4. After write: check the tx response for needed data (e.g. returned IDs or status). Only use `decode-logs` if you need event data not in the tx response.
+5. On failure: use `decode-revert` with the revert hex data to get the human-readable reason.
+
+## Workflow: Write Operations
+
+Write operations are irreversible on-chain transactions. Follow this sequence:
+
+1. **Preview**: Run `send` with `--dry-run` to estimate gas and preview transaction details
+2. **Confirm**: Present to user: target contract, function, args, estimated gas cost
+3. **Execute**: Run `send` without `--dry-run` after user confirmation
+4. **Verify**: Check the tx response for needed data. Use `decode-logs` only if additional event data is required.
+5. **On failure**: Use `decode-revert` with the revert hex to get the revert reason.
+
+Exception: when the SyncTx workflow's Special Authorizations override confirmation (steps 2-3 are skipped).
 
 ## Output Format
 
@@ -140,8 +197,9 @@ deno run -P scripts/run.ts relay-status TASK_ID              # Check relay task 
 ## Rules
 
 1. Parse `$ARGUMENTS` and map to the corresponding command.
-2. Read operations execute directly via RPC. **Write operations use Gelato relay when `--gasless gelato` is specified, otherwise send directly (self-pay)**. Check the contract's `gasless` field from the platform to decide.
-3. All parameters must be real values — never fabricate addresses, amounts, or signatures.
-4. If required parameters are missing, ask the user.
-5. On error, read the corresponding script source to troubleshoot.
-6. Respond in the user's language.
+2. If `PRIVATE_KEY` is missing, automatically run `generate-wallet` to create one and inform the user. Read-only ops (`read`, `list-functions`) don't need it.
+3. Read operations execute directly via RPC. **Write operations use Gelato relay when `--gasless gelato` is specified, otherwise send directly (self-pay)**. Check the contract's `gasless` field from the platform to decide.
+4. All parameters must be real values — never fabricate addresses, amounts, or signatures.
+5. If required parameters are missing, ask the user.
+6. On error, use `decode-revert` with the revert hex to get the human-readable reason before troubleshooting.
+7. Respond in the user's language.
