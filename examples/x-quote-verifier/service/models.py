@@ -11,6 +11,7 @@ class TweetInfo:
     """Tweet information returned by upstream API (after normalization)."""
 
     author_username: str        # lowercase, without '@'
+    author_user_id: str         # canonical decimal string
     is_quote: bool
     quoted_tweet_id: Optional[str]  # ID of the quoted original tweet
 
@@ -30,9 +31,11 @@ class VerifyResult:
     error: Optional[str] = None
     error_known: bool = False
 
+    reason: Optional[str] = None
+
     @staticmethod
-    def success(verified: bool) -> VerifyResult:
-        return VerifyResult(verified=verified)
+    def success(verified: bool, reason: Optional[str] = None) -> VerifyResult:
+        return VerifyResult(verified=verified, reason=reason)
 
     @staticmethod
     def unknown_error(msg: str) -> VerifyResult:

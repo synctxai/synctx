@@ -16,7 +16,7 @@ from config import settings
 
 # ---------------------------------------------------------------------------
 # Complete EIP-712 type definitions (consistent with XQuoteVerifierSpec.VERIFY_TYPEHASH)
-# TypeHash: keccak256("Verify(uint256 tweetId,string quoterUsername,uint256 fee,uint256 deadline)")
+# TypeHash: keccak256("Verify(string tweetId,uint64 quoterUserId,uint256 fee,uint256 deadline)")
 # ---------------------------------------------------------------------------
 
 EIP712_FULL_TYPES = {
@@ -28,7 +28,7 @@ EIP712_FULL_TYPES = {
     ],
     "Verify": [
         {"name": "tweetId", "type": "string"},
-        {"name": "quoterUsername", "type": "string"},
+        {"name": "quoterUserId", "type": "uint64"},
         {"name": "fee", "type": "uint256"},
         {"name": "deadline", "type": "uint256"},
     ],
@@ -43,25 +43,25 @@ DOMAIN = {
 
 # ---------------------------------------------------------------------------
 # specParams encoding/decoding
-# specParams = abi.encode(string tweet_id, string quoter_username, string quote_tweet_id)
+# specParams = abi.encode(string tweet_id, uint64 quoter_user_id, string quote_tweet_id)
 # ---------------------------------------------------------------------------
 
-SPEC_PARAMS_TYPES = ["string", "string", "string"]
+SPEC_PARAMS_TYPES = ["string", "uint64", "string"]
 
 
 class SpecParams(NamedTuple):
     tweet_id: str
-    quoter_username: str
+    quoter_user_id: int
     quote_tweet_id: str
 
 
 def decode_spec_params(spec_params: bytes) -> SpecParams:
     """Decode specParams per the XQuoteVerifierSpec definition."""
-    tweet_id, quoter_username, quote_tweet_id = abi_decode(
+    tweet_id, quoter_user_id, quote_tweet_id = abi_decode(
         SPEC_PARAMS_TYPES, spec_params
     )
     return SpecParams(
         tweet_id=tweet_id,
-        quoter_username=quoter_username,
+        quoter_user_id=quoter_user_id,
         quote_tweet_id=quote_tweet_id,
     )

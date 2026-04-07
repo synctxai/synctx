@@ -1,0 +1,20 @@
+{
+  "status": {
+    "0":   { "label": "Waiting Accept",      "icon": "hourglass",       "color": "blue" },
+    "1":   { "label": "Accept Timed Out",     "icon": "hourglass_error", "color": "red" },
+    "2":   { "label": "Waiting Claim",        "icon": "download",        "color": "blue" },
+    "3":   { "label": "Claim Timed Out",      "icon": "download_error",  "color": "red" },
+    "4":   { "label": "Waiting Confirm",      "icon": "clipboard",       "color": "blue" },
+    "5":   { "label": "Confirm Timed Out",    "icon": "clipboard_error", "color": "red" },
+    "6":   { "label": "Verifying",            "icon": "search",          "color": "blue" },
+    "7":   { "label": "Verifier Timed Out",   "icon": "search_error",    "color": "red" },
+    "8":   { "label": "Settling",             "icon": "scale",           "color": "blue" },
+    "9":   { "label": "Settlement Proposed",  "icon": "scale",           "color": "orange" },
+    "10":  { "label": "Settlement Timed Out", "icon": "scale_error",     "color": "red" },
+    "11":  { "label": "Completed",            "icon": "checkmark",       "color": "green" },
+    "12":  { "label": "Violated",             "icon": "warning",         "color": "red" },
+    "13":  { "label": "Cancelled",            "icon": "slash",           "color": "gray" },
+    "14":  { "label": "Forfeited",            "icon": "lock",            "color": "red" },
+    "255": { "label": "Not Found",            "icon": "question",        "color": "gray" }
+  }
+}

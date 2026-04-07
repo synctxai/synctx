@@ -8,7 +8,7 @@
 
 XQuoteDealContract is a concrete DealContract implementation for the **"A pays B to quote a specified tweet"** transaction scenario.
 
-- **Inheritance:** `IDealContract → DealContractBase → XQuoteDealContract`
+- **Inheritance:** `IDeal → DealBase → XQuoteDealContract`
 - **Verification system:** Single verification slot, requiring the spec to be `XQuoteVerifierSpec`
 - **Payment token:** USDC
 - **Tags:** `["x", "quote"]`
@@ -19,67 +19,64 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 
 ### 2.1 All XQuoteDealContract Functions
 
-> Inheritance chain: `IDealContract → DealContractBase → XQuoteDealContract`
+> Inheritance chain: `IDeal → DealBase → XQuoteDealContract`
 
 | Method | Parameters | Return Value | Defined In | Implemented In | Description |
 |--------|------------|--------------|------------|----------------|-------------|
-| `interfaceVersion()` | — | `string` | IDealContract | DealContractBase | Returns `"1.0"`. `pure`, cannot be overridden |
-| `supportsInterface(id)` | `bytes4 id` | `bool` | IDealContract | DealContractBase | ERC-165. `pure`, cannot be overridden |
-| `startCount()` | — | `uint256` | IDealContract | DealContractBase | Total number of deals created. Private storage, subclasses cannot tamper. `view` |
-| `activatedCount()` | — | `uint256` | IDealContract | DealContractBase | Number of activated deals. `view` |
-| `endCount()` | — | `uint256` | IDealContract | DealContractBase | Number of normally ended deals. `view` |
-| `disputeCount()` | — | `uint256` | IDealContract | DealContractBase | Number of disputed deals. `view` |
-| `_recordStart(...)` | `address[] traders, address[] verifiers` | `uint256 dealIndex` | DealContractBase | DealContractBase | Internal utility. Emits DealCreated, startCount++ |
-| `_recordActivated(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealActivated, activatedCount++ |
-| `_recordEnd(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealEnded, endCount++ |
-| `_recordDispute(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealDisputed, disputeCount++ |
-| `_recordCancelled(dealIndex)` | `uint256 dealIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealCancelled, does not affect any counters |
-| `_emitStateChanged(...)` | `uint256 dealIndex, uint8 stateIndex` | — | DealContractBase | DealContractBase | Internal utility. Emits DealStateChanged |
-| `_emitViolated(...)` | `uint256 dealIndex, address violator` | — | DealContractBase | DealContractBase | Internal utility. Emits DealViolated |
-| `contractName()` | — | `string` | IDealContract | XQuoteDealContract | Returns `"XQuoteDealContract"`. `pure` |
-| `description()` | — | `string` | IDealContract | XQuoteDealContract | Contract description, used for SyncTx search. `pure` |
-| `getTags()` | — | `string[]` | IDealContract | XQuoteDealContract | Returns `["x", "quote"]`. `pure` |
-| `dealVersion()` | — | `string` | IDealContract | XQuoteDealContract | Deal rule version number. `pure` |
-| `protocolFee()` | — | `uint256` | IDealContract | XQuoteDealContract | Protocol fee. `view` |
-| `instruction()` | — | `string` (Markdown) | IDealContract | XQuoteDealContract | Operation guide, consistent with MCP terminology. `view` |
-| `status(dealIndex)` | `uint256 dealIndex` | `uint8` | IDealContract | XQuoteDealContract | General status: 0=NotFound 1=Active 2=Success 3=Failed 4=Refunding 5=Cancelled. `view` |
-| `dealStatus(dealIndex)` | `uint256 dealIndex` | `uint8` | IDealContract | XQuoteDealContract | Business status (State enum value). `view` |
-| `dealExists(dealIndex)` | `uint256 dealIndex` | `bool` | IDealContract | XQuoteDealContract | Whether the deal exists. `view` |
-| `getRequiredSpecs()` | — | `address[]` | IDealContract | XQuoteDealContract | Returns the list of spec addresses required for each verification slot. XQuoteDealContract has only 1 slot, pointing to the XQuoteVerifierSpec address. `view` |
-| `getVerificationParams(...)` | `uint256 dealIndex, uint256 verificationIndex` | `(address verifier, uint256 fee, uint256 deadline, bytes sig, bytes specParams)` | IDealContract | XQuoteDealContract | Called by the Verifier after receiving notification to obtain verification parameters. `specParams = abi.encode(tweet_id, quoter_username, quote_tweet_id)`. `view` |
-| `requestVerification(...)` | `uint256 dealIndex, uint256 verificationIndex` | — | IDealContract | XQuoteDealContract | Triggered by a Trader to initiate verification. Escrows verification fee + emits VerifyRequest. `external` |
-| `onReportResult(...)` | `uint256 dealIndex, uint256 verificationIndex, int8 result, string reason` | — | IDealContract | XQuoteDealContract | Verifier → DealContract callback. DealContractBase reverts by default, subclasses must override. `external` |
-| `createDeal(...)` | `address partyB, uint256 grossAmount, address verifier, uint256 verifierFee, uint256 deadline, bytes sig, string tweet_id, string quoter_username` | `uint256 dealIndex` | XQuoteDealContract | XQuoteDealContract | Creates a deal. Internally calls `XQuoteVerifierSpec.check()` for signature verification and escrows USDC. Business parameters are passed as flat arguments |
-| `accept(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Trader B accepts the deal. Created → Accepted |
-| `claimDone(...)` | `uint256 dealIndex, string quote_tweet_id` | — | XQuoteDealContract | XQuoteDealContract | Trader B claims task completion and submits the quote tweet ID. Accepted → ClaimedDone |
-| `confirmAndPay(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Trader A confirms completion and releases payment. ClaimedDone → Completed |
-| `cancelDeal(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | A cancels after timeout in Created stage, refunding all funds. Created → Cancelled |
-| `triggerTimeout(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Triggers timeout handling. Accepted timeout → Violated; ClaimedDone timeout (unverified) → auto-payment Completed |
-| `resetVerification(...)` | `uint256 dealIndex, uint256 verificationIndex` | — | XQuoteDealContract | XQuoteDealContract | Resets verification after Verifier timeout, refunding escrowed verification fee. ClaimedDone → Settling |
+| `standard()` | — | `string` | IDeal | DealBase | Returns `"1.0"`. `pure`, cannot be overridden |
+| `supportsInterface(id)` | `bytes4 id` | `bool` | IDeal | DealBase | ERC-165. `pure`, cannot be overridden |
+| `_recordStart(...)` | `address[] traders, address[] verifiers` | `uint256 dealIndex` | DealBase | DealBase | Internal utility. Emits DealCreated, returns dealIndex |
+| `_emitPhaseChanged(dealIndex, toPhase)` | `uint256 dealIndex, uint8 toPhase` | — | DealBase | DealBase | Internal utility. Emits DealPhaseChanged. phase: 2=Active, 3=Success, 4=Failed, 5=Cancelled |
+| `_emitStatusChanged(...)` | `uint256 dealIndex, uint8 statusIndex` | — | DealBase | DealBase | Internal utility. Emits DealStatusChanged |
+| `_emitViolated(...)` | `uint256 dealIndex, address violator, string reason` | — | DealBase | DealBase | Internal utility. Emits DealViolated |
+| `name()` | — | `string` | IDeal | XQuoteDealContract | Returns `"XQuoteDealContract"`. `pure` |
+| `description()` | — | `string` | IDeal | XQuoteDealContract | Contract description, used for SyncTx search. `pure` |
+| `tags()` | — | `string[]` | IDeal | XQuoteDealContract | Returns `["x", "quote"]`. `pure` |
+| `version()` | — | `string` | IDeal | XQuoteDealContract | Deal rule version number. `pure` |
+| `protocolFeePolicy()` | — | `string` | IDeal | XQuoteDealContract | Human-readable protocol fee policy. `view` |
+| `protocolFee()` | — | `uint96` | XQuoteDealContract | XQuoteDealContract | Convenience helper for the exact fee amount. `view` |
+| `instruction()` | — | `string` (Markdown) | IDeal | XQuoteDealContract | Operation guide, consistent with MCP terminology. `view` |
+| `phase(dealIndex)` | `uint256 dealIndex` | `uint8` | IDeal | XQuoteDealContract | General phase: 0=NotFound 1=Pending 2=Active 3=Success 4=Failed 5=Cancelled. `view` |
+| `dealStatus(dealIndex)` | `uint256 dealIndex` | `uint8` | IDeal | XQuoteDealContract | Caller-independent business status. Returns 0-14 plus 255 for NotFound. `view` |
+| `dealExists(dealIndex)` | `uint256 dealIndex` | `bool` | IDeal | XQuoteDealContract | Whether the deal exists. `view` |
+| `requiredSpecs()` | — | `address[]` | IDeal | XQuoteDealContract | Returns the list of spec addresses required for each verification slot. XQuoteDealContract has only 1 slot, pointing to the XQuoteVerifierSpec address. `view` |
+| `verificationParams(...)` | `uint256 dealIndex, uint256 verificationIndex` | `(address verifier, uint256 fee, uint256 deadline, bytes sig, bytes specParams)` | IDeal | XQuoteDealContract | Called by the Verifier after receiving notification to obtain verification parameters. `specParams = abi.encode(tweet_id, quoter_user_id, quote_tweet_id)`. `view` |
+| `requestVerification(...)` | `uint256 dealIndex, uint256 verificationIndex` | — | IDeal | XQuoteDealContract | Triggered by a Trader to initiate verification. Escrows verification fee + emits VerificationRequested. `external` |
+| `onVerificationResult(...)` | `uint256 dealIndex, uint256 verificationIndex, int8 result, string reason` | — | IDeal | XQuoteDealContract | Verifier → DealContract callback. DealBase reverts by default, subclasses must override. `external` |
+| `createDeal(...)` | `address partyB, uint96 grossAmount, address verifier, uint96 verifierFee, uint256 deadline, bytes sig, string tweet_id, uint64 quoterUserId, bytes bindingSig` | `uint256 dealIndex` | XQuoteDealContract | XQuoteDealContract | Creates a deal. Verifies B's Binding Attestation, then calls `XQuoteVerifierSpec.check()` for verifier signature verification. Business parameters are passed as flat arguments |
+| `accept(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Trader B accepts the deal. WaitingAccept → WaitingClaim |
+| `claimDone(...)` | `uint256 dealIndex, string quote_tweet_id` | — | XQuoteDealContract | XQuoteDealContract | Trader B claims task completion and submits the quote tweet ID. WaitingClaim → WaitingConfirm |
+| `confirmAndPay(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Trader A confirms completion and releases payment. WaitingConfirm → Completed |
+| `cancelDeal(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | A cancels after timeout in WaitingAccept stage, refunding all funds. WaitingAccept → Cancelled |
+| `triggerTimeout(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Triggers timeout handling. WaitingClaim timeout → Violated; WaitingConfirm timeout (unverified) → auto-payment Completed |
+| `resetVerification(...)` | `uint256 dealIndex, uint256 verificationIndex` | — | XQuoteDealContract | XQuoteDealContract | Resets verification after Verifier timeout, refunding escrowed verification fee. WaitingConfirm → Settling |
 | `proposeSettlement(...)` | `uint256 dealIndex, uint256 amountToA` | — | XQuoteDealContract | XQuoteDealContract | Proposes a fund distribution plan. The proposer cannot confirm their own proposal; the counterparty can overwrite the previous proposal |
 | `confirmSettlement(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | Confirms the counterparty's distribution plan and executes fund distribution. Settling → Completed |
-| `triggerSettlementTimeout(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | After 12h negotiation timeout, anyone can call to seize funds to FeeCollector. Settling → Completed |
+| `triggerSettlementTimeout(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | After 12h negotiation timeout, anyone can call to seize funds to FeeCollector. Settling → Forfeited |
 | `withdraw(dealIndex)` | `uint256 dealIndex` | — | XQuoteDealContract | XQuoteDealContract | The non-violating party withdraws all locked funds. Only callable in Violated state; the violating party cannot call |
 
 ### 2.2 All XQuoteVerifier Functions
 
 > Inheritance chain: `IVerifier → VerifierBase → XQuoteVerifier`
-> Spec contract: `IVerifierSpec → XQuoteVerifierSpec` (pointed to by XQuoteVerifier.spec())
+> Spec contract: `VerifierSpec → XQuoteVerifierSpec` (pointed to by XQuoteVerifier.spec())
 
 | Method | Parameters | Return Value | Defined In | Implemented In | Description |
 |--------|------------|--------------|------------|----------------|-------------|
-| `reportResult(...)` | `address dealContract, uint256 dealIndex, uint256 verificationIndex, int8 result, string reason` | — | IVerifier | VerifierBase | Called by the Verifier owner (EOA), internally calls back `IDealContract(dealContract).onReportResult()`. `external` |
+| `reportResult(...)` | `address dealContract, uint256 dealIndex, uint256 verificationIndex, int8 result, string reason, uint256 expectedFee` | — | IVerifier | VerifierBase | Called by the Verifier signer (EOA), internally calls back `IDeal(dealContract).onVerificationResult()`. `external` |
 | `owner()` | — | `address` | IVerifier | VerifierBase | Contract owner. `view` |
+| `signer()` | — | `address` | IVerifier | VerifierBase | Signing / reporting EOA. `view` |
 | `supportsInterface(id)` | `bytes4 id` | `bool` | IVerifier | VerifierBase | ERC-165. `pure` |
 | `transferOwnership(...)` | `address newOwner` | — | VerifierBase | VerifierBase | Instance ownership management |
+| `acceptOwnership()` | — | — | VerifierBase | VerifierBase | Two-step ownership acceptance |
+| `setSigner(...)` | `address newSigner` | — | VerifierBase | VerifierBase | Change verifier signer EOA |
 | `withdrawFees(...)` | `address to, uint256 amount` | — | VerifierBase | VerifierBase | Withdraw fees received by the instance |
-| `DOMAIN_SEPARATOR` | — | `bytes32` | VerifierBase | VerifierBase | public immutable, read by the Spec contract's `check()` |
+| `DOMAIN_SEPARATOR` | — | `bytes32` | VerifierBase | VerifierBase | Public immutable, read by the Spec contract's `check()` |
 | `description()` | — | `string` | IVerifier | XQuoteVerifier | Instance self-description. `view` |
 | `spec()` | — | `address` | IVerifier | XQuoteVerifier | Points to the business specification contract XQuoteVerifierSpec address. `view` |
-| `spec()->name()` | — | `string` | IVerifierSpec | XQuoteVerifierSpec | Returns `"XQuoteVerifierSpec"`. Called indirectly via spec() |
-| `spec()->version()` | — | `string` | IVerifierSpec | XQuoteVerifierSpec | Returns `"1.0"`. Called indirectly via spec() |
-| `spec()->description()` | — | `string` | IVerifierSpec | XQuoteVerifierSpec | Specification description: includes parameter definitions, check semantics, and specParams abi.encode format. Called indirectly via spec() |
-| `spec()->check(...)` | `address verifierInstance, string tweet_id, string quoter_username, uint256 fee, uint256 deadline, bytes sig` | — | XQuoteVerifierSpec | XQuoteVerifierSpec | Business validation entry point. Reads DOMAIN_SEPARATOR and owner from the instance to complete EIP-712 signature verification. Reverts: SignatureExpired / InvalidSignature / InvalidVerifierSign. Called by DealContract internally during createDeal |
+| `spec()->name()` | — | `string` | VerifierSpec | XQuoteVerifierSpec | Returns `"X Quote Tweet Verifier Spec"`. Called indirectly via spec() |
+| `spec()->version()` | — | `string` | VerifierSpec | XQuoteVerifierSpec | Returns `"1.0"`. Called indirectly via spec() |
+| `spec()->description()` | — | `string` | VerifierSpec | XQuoteVerifierSpec | Specification description: includes parameter definitions, check semantics, and specParams abi.encode format. Called indirectly via spec() |
+| `spec()->check(...)` | `address verifierInstance, string tweet_id, uint64 quoterUserId, uint256 fee, uint256 deadline, bytes sig` | `address` | XQuoteVerifierSpec | XQuoteVerifierSpec | Business validation entry point. Reads DOMAIN_SEPARATOR from the instance and verifies the recovered signer matches `verifierInstance.signer()`. Reverts: SignatureExpired / InvalidSignature / InvalidVerifierSignature. Called by DealContract internally during createDeal |
 
 ---
 
@@ -87,16 +84,13 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 
 | Event Name | Parameters | Implemented In | Trigger Timing | Description |
 |------------|------------|----------------|----------------|-------------|
-| `DealCreated` | `uint256 dealIndex, address[] traders, address[] verifiers` | DealContractBase (`_recordStart`) | When `createDeal` succeeds | startCount++. traders and verifiers record the participants |
-| `DealStateChanged` | `uint256 dealIndex, uint8 stateIndex` | DealContractBase (`_emitStateChanged`) | On every state change | stateIndex corresponds to the State enum value. SyncTx uses this + instruction() to infer who needs to act |
-| `DealActivated` | `uint256 dealIndex` | DealContractBase (`_recordActivated`) | When `accept` succeeds | activatedCount++. All participants have confirmed |
-| `DealCancelled` | `uint256 dealIndex` | DealContractBase (`_recordCancelled`) | On `cancelDeal` (Created timeout cancellation) | Does not affect any counters. B has not accepted yet, so it does not constitute a violation |
-| `DealViolated` | `uint256 dealIndex, address violator` | DealContractBase (`_emitViolated`) | triggerTimeout (Accepted stage) / verification failure (result<0) | violator is the address of the violating party |
-| `DealDisputed` | `uint256 dealIndex` | DealContractBase (`_recordDispute`) | On violation (triggerTimeout / verification failure), after DealViolated | disputeCount++ |
-| `DealEnded` | `uint256 dealIndex` | DealContractBase (`_recordEnd`) | On normal completion (confirmAndPay / verification passed / timeout auto-payment / negotiated distribution / negotiation timeout seizure) | endCount++ |
-| `VerifyRequest` | `uint256 dealIndex, uint256 verificationIndex, address verifier` | XQuoteDealContract (`requestVerification`) | When `requestVerification` succeeds | Also transfers verification fee to contract escrow. Verifier calls getVerificationParams after receiving notification |
-| `VerificationReceived` | `uint256 dealIndex, uint256 verificationIndex, address verifier, int8 result` | XQuoteDealContract (`onReportResult`) | When Verifier reports result | Emitted in the onReportResult callback |
-| `DealCompleted` | `uint256 dealIndex, uint256 amount` | XQuoteDealContract | confirmAndPay / verification passed (result>0) / ClaimedDone timeout auto-payment | Normal payment completion |
+| `DealCreated` | `uint256 dealIndex, address[] traders, address[] verifiers` | DealBase (`_recordStart`) | When `createDeal` succeeds | traders and verifiers record the participants |
+| `DealStatusChanged` | `uint256 dealIndex, uint8 statusIndex` | DealBase (`_emitStatusChanged`) | On every state change | statusIndex corresponds to the base dealStatus value. SyncTx uses this + instruction() to infer who needs to act |
+| `DealPhaseChanged` | `uint256 indexed dealIndex, uint8 indexed phase` | DealBase (`_emitPhaseChanged`) | On phase transitions: accept (2), normal completion (3), violation (4), cancellation (5) | phase: 2=Active, 3=Success, 4=Failed, 5=Cancelled |
+| `DealViolated` | `uint256 dealIndex, address violator` | DealBase (`_emitViolated`) | triggerTimeout (Accepted stage) / verification failure (result<0) | violator is the address of the violating party |
+| `VerificationRequested` | `uint256 dealIndex, uint256 verificationIndex, address verifier` | XQuoteDealContract (`requestVerification`) | When `requestVerification` succeeds | Also transfers verification fee to contract escrow. Verifier calls verificationParams after receiving notification |
+| `VerificationReceived` | `uint256 dealIndex, uint256 verificationIndex, address verifier, int8 result` | XQuoteDealContract (`onVerificationResult`) | When Verifier reports result | Emitted in the onVerificationResult callback |
+| `DealCompleted` | `uint256 dealIndex, uint256 amount` | XQuoteDealContract | confirmAndPay / verification passed (result>0) / WaitingConfirm timeout auto-payment | Normal payment completion |
 | `VerificationReset` | `uint256 dealIndex, uint256 verificationIndex, address verifier` | XQuoteDealContract | On `resetVerification` (Verifier timeout) | Refunds escrowed verification fee to the initiator |
 | `SettlingStarted` | `uint256 dealIndex` | XQuoteDealContract | Verification inconclusive (result==0) / resetVerification | Enters Settling state |
 | `SettlementProposed` | `uint256 dealIndex, address proposer, uint256 amountToA` | XQuoteDealContract | On `proposeSettlement` | remainder = amount - amountToA goes to B |
@@ -111,7 +105,7 @@ XQuoteDealContract is a concrete DealContract implementation for the **"A pays B
 ### 4.1 Contract Structure
 
 ```
-IVerifierSpec ← XQuoteVerifierSpec (business specification contract)
+VerifierSpec ← XQuoteVerifierSpec (business specification contract)
 IVerifier ← VerifierBase ← XQuoteVerifier (instance contract)
 XQuoteVerifier.spec() → XQuoteVerifierSpec (composition relationship)
 ```
@@ -120,32 +114,32 @@ XQuoteVerifier.spec() → XQuoteVerifierSpec (composition relationship)
 
 | Contract | Responsibility |
 |----------|---------------|
-| **XQuoteVerifierSpec** | Business specification contract. Fixed `name/version/description`. Defines and implements `check()`: receives the instance contract address and business parameters, constructs structHash, calls back to the instance's DOMAIN_SEPARATOR and owner to complete EIP-712 signature verification |
-| **VerifierBase** | Abstract base class. Provides `DOMAIN_SEPARATOR` (public immutable), `owner`, `reportResult` callback, fee withdrawal, ownership management |
+| **XQuoteVerifierSpec** | Business specification contract. Fixed `name/version/description`. Defines and implements `check()`: receives the instance contract address and business parameters, constructs structHash, calls back to the instance's DOMAIN_SEPARATOR and signer to complete EIP-712 signature verification |
+| **VerifierBase** | Abstract base class. Provides `DOMAIN_SEPARATOR` (public immutable), `owner`, `signer`, `reportResult` callback, fee withdrawal, ownership management |
 | **XQuoteVerifier** | Instance contract. Inherits VerifierBase, composes XQuoteVerifierSpec. Exposes `spec()` and `description()`. **Does not implement `check()`** |
 
 ### 4.3 check() Signature Verification Flow
 
 ```
-XQuoteVerifierSpec.check(verifierInstance, tweet_id, quoter_username, fee, deadline, sig)
+XQuoteVerifierSpec.check(verifierInstance, tweet_id, quoterUserId, fee, deadline, sig)
   │
-  ├── 1. Construct structHash(tweet_id, quoter_username, fee, deadline)
+  ├── 1. Construct structHash(tweet_id, quoterUserId, fee, deadline)
   ├── 2. Read DOMAIN_SEPARATOR from verifierInstance
   ├── 3. Construct EIP-712 digest = keccak256(0x1901 || DOMAIN_SEPARATOR || structHash)
   ├── 4. Recover signer from sig (with EIP-2 low-s value check)
-  └── 5. Verify signer == verifierInstance.owner()
-       ├── Failure → revert SignatureExpired / InvalidSignature / InvalidVerifierSign
+  └── 5. Verify signer == verifierInstance.signer()
+       ├── Failure → revert SignatureExpired / InvalidSignature / InvalidVerifierSignature
        └── Success → passed
 ```
 
 ### 4.4 specParams Encoding
 
-The `specParams` encoding format returned by `getVerificationParams()`:
+The `specParams` encoding format returned by `verificationParams()`:
 
 ```solidity
 specParams = abi.encode(
     string tweet_id,          // Original tweet ID
-    string quoter_username,   // Quoter's username
+    uint64 quoter_user_id,    // Quoter's Twitter immutable user_id
     string quote_tweet_id     // Quote tweet ID submitted by B
 )
 ```
@@ -184,7 +178,7 @@ sequenceDiagram
     A->>P: 🟣 search_traders(query, limit?) → json⁷
     Note over A,D: After selecting the DealContract
     A->>D: 🟡 instruction() → Markdown operation guide
-    A->>D: 🟡 getRequiredSpecs() → address[] spec addresses required for each verification slot
+    A->>D: 🟡 requiredSpecs() → address[] spec addresses required for each verification slot
     Note over A,P: Find and determine the verifier needed for each slot via spec
     A->>P: 🟣 search_verifiers(query, spec, limit?) → json⁸
 
@@ -195,23 +189,23 @@ sequenceDiagram
     Note over A,B: Both parties agree on reward, deadline, etc.
 
     Note over A,V: Obtain Verifier Signature
-    A->>P: 🟣 request_sign(verifier_address, params, deadline)<br/>params = {tweet_id, quoter_username}
+    A->>P: 🟣 request_sign(verifier_address, params, deadline)<br/>params = {tweet_id, quoterUserId}
     P-->>V: async message {action: "request_sign", params, deadline}
     V->>P: 🟣 send_message reply
     P-->>A: async message {accepted: true, fee, sig}<br/>or {accepted: false, reason}
 
     Note over A,D: In this example traders = [A, B], verificationIndex = 0
     Note over A: 🟢 USDC.approve(DealContract, reward + protocolFee + verifierFee)
-    A->>D: 🟢 createDeal(partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoter_username) → dealIndex
-    Note over D,V: Calls spec.check(verifier, business params, verifierFee, deadline, sig) for signature verification<br/>Business params taken from createDeal flat arguments; failure reverts: SignatureExpired / InvalidSignature / InvalidVerifierSign
-    Note over D: 🔵 DealCreated(dealIndex, traders[], verifiers[])<br/>🔵 DealStateChanged(dealIndex, 0)
+    A->>D: 🟢 createDeal(partyB, grossAmount, verifier, verifierFee, deadline, sig, tweet_id, quoterUserId, bindingSig) → dealIndex
+    Note over D,V: Calls spec.check(verifier, business params, verifierFee, deadline, sig) for signature verification<br/>Business params taken from createDeal flat arguments<br/>Failure reverts: SignatureExpired, InvalidSignature, InvalidVerifierSignature
+    Note over D: 🔵 DealCreated(dealIndex, traders[], verifiers[])<br/>🔵 DealStatusChanged(dealIndex, 0)
     A->>P: 🟣 report_transaction(tx_hash, chain_id)
     A->>P: 🟣 send_message [notify B: dealContract, dealIndex, tx_hash]
     P-->>B: async message
 
     Note over B: Verify transaction content via tx_hash:<br/>1. Get receipt, parse DealCreated event to confirm dealIndex<br/>2. Parse tx calldata, decode createDeal params with DealContract ABI<br/>3. Compare each field against negotiated terms (partyB, amount, verifier, etc.)
     B->>D: 🟢 accept(dealIndex)
-    Note over D: 🔵 DealActivated(dealIndex)<br/>🔵 DealStateChanged(dealIndex, 1)
+    Note over D: 🔵 DealPhaseChanged(dealIndex, 2)<br/>🔵 DealStatusChanged(dealIndex, 2)
     B->>P: 🟣 report_transaction(tx_hash, chain_id)
     B->>P: 🟣 send_message [notify A: accepted]
     P-->>A: async message
@@ -219,37 +213,37 @@ sequenceDiagram
     Note over B: Execute task obligation (off-chain)
 
     B->>D: 🟢 claimDone(dealIndex, quote_tweet_id)
-    Note over D: 🔵 DealStateChanged(dealIndex, 2)
+    Note over D: 🔵 DealStatusChanged(dealIndex, 4)
     B->>P: 🟣 report_transaction(tx_hash, chain_id)
     B->>P: 🟣 send_message [notify A: task completed]
     P-->>A: async message
 
     alt A confirms after local verification
         A->>D: 🟢 confirmAndPay(dealIndex)
-        Note over D: USDC.transfer(B, reward)<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)
+        Note over D: USDC.transfer(B, reward)<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStatusChanged(dealIndex, 11)<br/>🔵 DealPhaseChanged(dealIndex, 3)
         A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
     else A initiates Verifier verification
         A->>D: 🟢 requestVerification(dealIndex, verificationIndex)
-        Note over D: USDC.transferFrom(caller → contract, escrow verification fee)<br/>🔵 VerifyRequest(dealIndex, verificationIndex, verifier)
+        Note over D: USDC.transferFrom(caller → contract, escrow verification fee)<br/>🔵 VerificationRequested(dealIndex, verificationIndex, verifier)
         A->>P: 🟣 report_transaction(tx_hash, chain_id)
 
         A->>P: 🟣 notify_verifier(verifier_address, dealContract, dealIndex, verificationIndex)
         P-->>V: async message json⁹
 
-        V->>D: 🟡 Call getVerificationParams(dealIndex, verificationIndex) to get verification parameters
+        V->>D: 🟡 Call verificationParams(dealIndex, verificationIndex) to get verification parameters
         Note over V: Execute off-chain verification using on-chain parameters
 
         V->>D: 🟢 reportResult(dealContract, dealIndex, verificationIndex, result, reason, expectedFee)
-        Note over V,D: Verifier owner (EOA) calls VerifierContract.reportResult()<br/>VerifierContract internally calls back IDealContract(dealContract).onReportResult()<br/>onReportResult transfers escrowed verification fee to Verifier<br/>VerifierContract verifies received amount ≥ expectedFee
-        Note over D: onReportResult callback<br/>🔵 VerificationReceived(dealIndex, verificationIndex, verifier, result)
+        Note over V,D: Verifier signer (EOA) calls VerifierContract.reportResult()<br/>VerifierContract internally calls back IDeal(dealContract).onVerificationResult()<br/>onVerificationResult transfers escrowed verification fee to Verifier<br/>VerifierContract verifies received amount ≥ expectedFee
+        Note over D: onVerificationResult callback<br/>🔵 VerificationReceived(dealIndex, verificationIndex, verifier, result)
 
         alt result > 0 verification passed
-            Note over D: Release payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)
+            Note over D: Release payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStatusChanged(dealIndex, 11)<br/>🔵 DealPhaseChanged(dealIndex, 3)
         else result < 0 verification failed
-            Note over D: B violated<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStateChanged(dealIndex, 4)<br/>🔵 DealDisputed(dealIndex)
+            Note over D: B violated<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStatusChanged(dealIndex, 12)<br/>🔵 DealPhaseChanged(dealIndex, 4)
         else result == 0 inconclusive
-            Note over D: 🔵 DealStateChanged(dealIndex, 5)
+            Note over D: 🔵 DealStatusChanged(dealIndex, 8)
         end
         V->>P: 🟣 report_transaction(tx_hash, chain_id)
     end
@@ -261,48 +255,75 @@ sequenceDiagram
 
 ### 6.1 State Enum
 
-| stateIndex | State | Meaning |
+| statusIndex | State | Meaning |
 |-----------|-------|---------|
-| 0 | Created | A has created the deal and deposited funds, waiting for B to accept |
-| 1 | Accepted | B has accepted, waiting for B to execute the task and claimDone |
-| 2 | ClaimedDone | B claims completion, waiting for A to confirm or initiate verification |
-| 3 | Completed | Normally ended, payment released |
-| 4 | Violated | Violation (failed to fulfill obligation after accepting) |
-| 5 | Settling | Inconclusive, both parties negotiating |
-| 6 | Cancelled | B did not accept, A recovered funds, deal cancelled |
+| 0 | WaitingAccept | Deal created, waiting for B to accept |
+| 1 | AcceptTimedOut | B failed to accept before timeout |
+| 2 | WaitingClaim | B accepted, waiting for B to execute the task |
+| 3 | ClaimTimedOut | B failed to claim before timeout |
+| 4 | WaitingConfirm | B claims completion, waiting for A to confirm or trigger verification |
+| 5 | ConfirmTimedOut | A failed to confirm before timeout |
+| 6 | Verifying | Verification in progress, waiting for Verifier |
+| 7 | VerifierTimedOut | Verifier failed to respond in time |
+| 8 | Settling | Entered settlement negotiation phase |
+| 9 | SettlementProposed | A settlement proposal exists |
+| 10 | SettlementTimedOut | Settlement timed out, pending proposals can still be confirmed |
+| 11 | Completed | Deal completed, funds released |
+| 12 | Violated | Violation occurred, non-violating party may withdraw |
+| 13 | Cancelled | Deal cancelled before B accepted |
+| 14 | Forfeited | Funds seized to protocol |
 
-> stateIndex is defined by each DealContract's business implementation; different contracts may have different numbering and meanings.
+> statusIndex is the stored base `dealStatus` value used by the contract. Different contracts may have different numbering, but XQuote uses the values above.
 
 ### 6.2 State Transition Diagram
 
 ```mermaid
 flowchart TD
-    Created["0 Created<br/>A created, waiting for B to accept"]
-    Accepted["1 Accepted<br/>B accepted, waiting for B to claimDone"]
-    ClaimedDone["2 ClaimedDone<br/>B claims completion"]
-    Completed["3 Completed ✅<br/>Normally ended"]
-    Cancelled["6 Cancelled 🚫<br/>Cancelled, A refunded"]
-    Violated["4 Violated ❌<br/>Violation"]
-    Settling["5 Settling ⚖️<br/>Negotiating"]
+    WaitingAccept["0 WaitingAccept<br/>B has not accepted yet"]
+    AcceptTimedOut["1 AcceptTimedOut<br/>B missed the accept deadline"]
+    WaitingClaim["2 WaitingClaim<br/>B accepted, waiting for claimDone"]
+    ClaimTimedOut["3 ClaimTimedOut<br/>B missed the claim deadline"]
+    WaitingConfirm["4 WaitingConfirm<br/>B claimed completion"]
+    ConfirmTimedOut["5 ConfirmTimedOut<br/>A missed the confirm deadline"]
+    Verifying["6 Verifying<br/>Verifier is checking"]
+    VerifierTimedOut["7 VerifierTimedOut<br/>Verifier missed the response window"]
+    Settling["8 Settling<br/>Negotiation in progress"]
+    SettlementProposed["9 SettlementProposed<br/>Proposal exists"]
+    SettlementTimedOut["10 SettlementTimedOut<br/>Negotiation deadline reached"]
+    Completed["11 Completed ✅<br/>Normal end"]
+    Violated["12 Violated ❌<br/>B breached the deal"]
+    Cancelled["13 Cancelled 🚫<br/>B never accepted"]
+    Forfeited["14 Forfeited ⚠️<br/>Funds seized to protocol"]
 
-    Created -->|"B: accept()<br/>Normal flow"| Accepted
-    Created -->|"STAGE_TIMEOUT expired<br/>A: cancelDeal()<br/>A recovers all funds"| Cancelled
+    WaitingAccept -->|"B: accept()"| WaitingClaim
+    WaitingAccept -->|"STAGE_TIMEOUT expired<br/>A: cancelDeal()"| Cancelled
+    WaitingAccept -->|timeout when waiting for accept| AcceptTimedOut
 
-    Accepted -->|"B: claimDone(quote_tweet_id)<br/>Normal flow"| ClaimedDone
-    Accepted -->|"STAGE_TIMEOUT expired<br/>A: triggerTimeout()<br/>B violated, A withdraws funds"| Violated
+    WaitingClaim -->|"B: claimDone(quote_tweet_id)"| WaitingConfirm
+    WaitingClaim -->|"STAGE_TIMEOUT expired<br/>A: triggerTimeout()"| Violated
+    WaitingClaim -->|timeout state| ClaimTimedOut
 
-    ClaimedDone -->|"A: confirmAndPay()<br/>A directly confirms payment to B"| Completed
-    ClaimedDone -->|"STAGE_TIMEOUT expired & unverified<br/>B: triggerTimeout()<br/>Auto-payment to B"| Completed
-    ClaimedDone -->|"A/B: requestVerification()<br/>Initiate verification, state unchanged"| ClaimedDone
-    ClaimedDone -->|"onReportResult(result>0)<br/>Verification passed, payment to B"| Completed
-    ClaimedDone -->|"onReportResult(result<0)<br/>Verification failed, B violated"| Violated
-    ClaimedDone -->|"onReportResult(result==0)<br/>Verification inconclusive"| Settling
-    ClaimedDone -->|"VERIFICATION_TIMEOUT expired<br/>A/B: resetVerification()<br/>Refund verification fee"| Settling
+    WaitingConfirm -->|"A: confirmAndPay()"| Completed
+    WaitingConfirm -->|"B: triggerTimeout() after deadline<br/>auto-pay to B"| Completed
+    WaitingConfirm -->|"A/B: requestVerification()"| Verifying
+    WaitingConfirm -->|"onVerificationResult(result>0)"| Completed
+    WaitingConfirm -->|"onVerificationResult(result<0)"| Violated
+    WaitingConfirm -->|"onVerificationResult(result==0)"| Settling
+    WaitingConfirm -->|"VERIFICATION_TIMEOUT expired<br/>resetVerification()"| Settling
+    WaitingConfirm -->|timeout state| ConfirmTimedOut
 
-    Settling -->|"proposeSettlement(amountToA)<br/>+ counterparty confirmSettlement()<br/>Agreement reached, proportional distribution"| Completed
-    Settling -->|"SETTLING_TIMEOUT 12h expired<br/>Anyone: triggerSettlementTimeout()<br/>Funds seized to FeeCollector"| Completed
+    Verifying -->|"reportResult()"| Completed
+    Verifying -->|"reportResult(result<0)"| Violated
+    Verifying -->|"reportResult(result==0)"| Settling
+    Verifying -->|"VERIFICATION_TIMEOUT expired<br/>resetVerification()"| Settling
+    Verifying -->|timeout state| VerifierTimedOut
 
-    Violated -->|"Non-violating party: withdraw()<br/>Recover all locked funds<br/>State unchanged"| Violated
+    Settling -->|"proposeSettlement() + confirmSettlement()"| Completed
+    Settling -->|"triggerSettlementTimeout() after 12h"| Forfeited
+    Settling -->|"proposal exists"| SettlementProposed
+    Settling -->|"timeout state"| SettlementTimedOut
+
+    Violated -->|"withdraw()"| Violated
 ```
 
 ---
@@ -313,7 +334,7 @@ flowchart TD
 
 | Constant | Value | Applicable Stage |
 |----------|-------|------------------|
-| `STAGE_TIMEOUT` | 30 minutes | Created / Accepted / ClaimedDone |
+| `STAGE_TIMEOUT` | 30 minutes | WaitingAccept / WaitingClaim / WaitingConfirm |
 | `VERIFICATION_TIMEOUT` | 30 minutes | Verifier response time limit |
 | `SETTLING_TIMEOUT` | 12 hours | Negotiation time limit |
 
@@ -328,9 +349,9 @@ sequenceDiagram
     participant A as Trader A
     participant D as DealContract
 
-    Note over A,D: Created state, B did not accept within STAGE_TIMEOUT
+    Note over A,D: WaitingAccept state, B did not accept within STAGE_TIMEOUT
     A->>D: 🟢 cancelDeal(dealIndex)
-    Note over D: USDC refunded to A<br/>🔵 DealCancelled(dealIndex)<br/>🔵 DealStateChanged(dealIndex, 6)<br/>→ State becomes Cancelled
+    Note over D: USDC refunded to A<br/>🔵 DealPhaseChanged(dealIndex, 5)<br/>🔵 DealStatusChanged(dealIndex, 13)<br/>→ State becomes Cancelled
 ```
 
 ### 7.3 Accepted → Timeout (B did not claimDone)
@@ -340,23 +361,23 @@ sequenceDiagram
     participant A as Trader A
     participant D as DealContract
 
-    Note over A,D: Accepted state, B did not claimDone within STAGE_TIMEOUT
+    Note over A,D: WaitingClaim state, B did not claimDone within STAGE_TIMEOUT
     A->>D: 🟢 triggerTimeout(dealIndex)
-    Note over D: B marked as violating party<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStateChanged(dealIndex, 4)<br/>🔵 DealDisputed(dealIndex)<br/>→ State becomes Violated
+    Note over D: B marked as violating party<br/>🔵 DealViolated(dealIndex, partyB)<br/>🔵 DealStatusChanged(dealIndex, 12)<br/>🔵 DealPhaseChanged(dealIndex, 4)<br/>→ State becomes Violated
     A->>D: 🟢 withdraw(dealIndex)
     Note over D: A recovers locked funds
 ```
 
-### 7.4 ClaimedDone → Timeout (A neither confirmed nor initiated verification)
+### 7.4 WaitingConfirm → Timeout (A neither confirmed nor initiated verification)
 
 ```mermaid
 sequenceDiagram
     participant B as Trader B
     participant D as DealContract
 
-    Note over B,D: ClaimedDone state, A did not<br/>confirmAndPay or requestVerification within STAGE_TIMEOUT
+    Note over B,D: WaitingConfirm state, A did not<br/>confirmAndPay or requestVerification within STAGE_TIMEOUT
     B->>D: 🟢 triggerTimeout(dealIndex)
-    Note over D: Auto-payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)<br/>→ State becomes Completed
+    Note over D: Auto-payment to B<br/>🔵 DealCompleted(dealIndex, amount)<br/>🔵 DealStatusChanged(dealIndex, 11)<br/>🔵 DealPhaseChanged(dealIndex, 3)<br/>→ State becomes Completed
 ```
 
 > **Note:** If A has already called requestVerification (verificationRequested = true), B cannot call triggerTimeout and must wait for the Verifier to respond or for Verifier timeout followed by resetVerification.
@@ -368,9 +389,9 @@ sequenceDiagram
     participant AB as Trader A/B
     participant D as DealContract
 
-    Note over AB,D: ClaimedDone state, requestVerification has been called<br/>Verifier did not reportResult within VERIFICATION_TIMEOUT
+    Note over AB,D: Verifying state, requestVerification has been called<br/>Verifier did not reportResult within VERIFICATION_TIMEOUT
     AB->>D: 🟢 resetVerification(dealIndex, verificationIndex)
-    Note over D: Reset the verification item status, refund escrowed verification fee to the requester<br/>🔵 VerificationReset(dealIndex, verificationIndex, verifier)<br/>🔵 SettlingStarted(dealIndex)<br/>→ State becomes Settling
+    Note over D: Reset the verification item status, refund escrowed verification fee to the requester<br/>🔵 VerificationReset(dealIndex, verificationIndex, verifier)<br/>🔵 SettlingStarted(dealIndex)<br/>🔵 DealStatusChanged(dealIndex, 8)<br/>→ State becomes Settling
     Note over AB: Verification fee refunded to the party who initiated verification
 ```
 
@@ -386,7 +407,7 @@ sequenceDiagram
     A->>D: 🟢 proposeSettlement(dealIndex, amountToA)
     Note over D: 🔵 SettlementProposed(dealIndex, A, amountToA)<br/>remainder = amount - amountToA goes to B
     B->>D: 🟢 confirmSettlement(dealIndex)
-    Note over D: Proportional fund distribution<br/>USDC.transfer(A, amountToA)<br/>USDC.transfer(B, remainder)<br/>🔵 SettlementConfirmed(dealIndex)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)<br/>→ State becomes Completed
+    Note over D: Proportional fund distribution<br/>USDC.transfer(A, amountToA)<br/>USDC.transfer(B, remainder)<br/>🔵 SettlementConfirmed(dealIndex)<br/>🔵 DealStatusChanged(dealIndex, 11)<br/>🔵 DealPhaseChanged(dealIndex, 3)<br/>→ State becomes Completed
 ```
 
 > The proposer cannot confirm their own proposal; the counterparty can reject and propose a new plan (overwriting the previous proposal).
@@ -400,7 +421,7 @@ sequenceDiagram
 
     Note over X,D: Settling state, both parties did not reach agreement within SETTLING_TIMEOUT (12h)
     X->>D: 🟢 triggerSettlementTimeout(dealIndex)
-    Note over D: Funds seized to FeeCollector<br/>🔵 FundsSeized(dealIndex, amount)<br/>🔵 DealStateChanged(dealIndex, 3)<br/>🔵 DealEnded(dealIndex)<br/>→ State becomes Completed
+    Note over D: Funds seized to FeeCollector<br/>🔵 SettlementTimedOutSeized(dealIndex, amount)<br/>🔵 DealStatusChanged(dealIndex, 14)<br/>🔵 DealPhaseChanged(dealIndex, 4)<br/>→ State becomes Forfeited
 ```
 
 > Anyone can trigger this (no permission restrictions), incentivizing timely negotiation.
@@ -443,10 +464,10 @@ Trader A approve amount = reward + protocolFee + verifierFee
 At createDeal, USDC.transferFrom(A → contract) escrows all funds
 ```
 
-- `protocolFee` is read via the `protocolFee()` view function
+- `protocolFee` policy is read via `protocolFeePolicy()`; the exact amount is available from the convenience helper `protocolFee()`
 - `verifierFee` is obtained from the Verifier's signature reply (`{accepted: true, fee: 2000000, sig: "0x..."}`)
 
-### 8.2 Normal Completion (confirmAndPay / Verification Passed / ClaimedDone Timeout Auto-Payment)
+### 8.2 Normal Completion (confirmAndPay / Verification Passed / WaitingConfirm Timeout Auto-Payment)
 
 ```
 reward        → Trader B
@@ -460,24 +481,26 @@ verifierFee   → Contract escrow, settled when requestVerification is called
 At requestVerification:
   USDC.transferFrom(caller → contract) escrows verification fee
 
-At reportResult callback (inside onReportResult):
-  Transfer escrowed verification fee to Verifier contract
+At reportResult callback (inside onVerificationResult):
+  Transfer escrowed verification fee to Verifier contract (for ALL result values: >0, <0, ==0)
   Verifier contract verifies received amount ≥ expectedFee
 
 At Verifier timeout resetVerification:
   Escrowed verification fee refunded to the party who initiated verification
 ```
 
+> **Design principle:** XQuoteDealContract pays the verification fee regardless of the result value. The Verifier performed the work; the fee is for the service, not the outcome. This ensures `reportResult()` never reverts due to `FeeNotReceived`, and the DealContract is responsible for correct fee handling — the Verifier should not bear the cost of a DealContract's fee logic error.
+
 ### 8.4 Abnormal Path Fund Destinations
 
 | Scenario | Fund Destination |
 |----------|-----------------|
-| Created timeout → cancelDeal | Full refund to A |
-| Accepted timeout → triggerTimeout → Violated | A recovers via withdraw |
-| ClaimedDone timeout (unverified) → triggerTimeout | Auto-payment to B |
+| WaitingAccept timeout → cancelDeal | Full refund to A |
+| WaitingClaim timeout → triggerTimeout → Violated | A recovers via withdraw |
+| WaitingConfirm timeout (unverified) → triggerTimeout | Auto-payment to B |
 | Verification failed (result<0) → Violated | Non-violating party recovers via withdraw |
 | Verification inconclusive (result==0) → Settling → negotiation | Distributed per proposeSettlement ratio |
-| Settling timeout → triggerSettlementTimeout | All seized to FeeCollector |
+| Settling timeout → triggerSettlementTimeout | All seized to FeeCollector; deal enters Forfeited (14) |
 
 ---
 
@@ -487,28 +510,32 @@ At Verifier timeout resetVerification:
 
 | # | Validation Item | Failure Handling |
 |---|-----------------|------------------|
-| 1 | Verifier spec match: `verifier.spec() == getRequiredSpecs()[0]` (i.e., XQuoteVerifierSpec) | revert |
-| 2 | Signature verification: calls `XQuoteVerifierSpec.check(verifier, tweet_id, quoter_username, verifierFee, deadline, sig)` | revert SignatureExpired / InvalidSignature / InvalidVerifierSign |
+| 1 | Verifier spec match: `verifier.spec() == requiredSpecs()[0]` (i.e., XQuoteVerifierSpec) | revert |
+| 2 | Binding Attestation: `_verifyBinding(partyB, quoterUserId, bindingSig)` | revert InvalidBindingSignature |
+| 3 | Verifier signature: calls `XQuoteVerifierSpec.check(verifier, tweet_id, quoterUserId, verifierFee, deadline, sig)` | revert SignatureExpired / InvalidSignature / InvalidVerifierSignature |
 | 3 | Fund transfer: `USDC.transferFrom(A, contract, grossAmount)` | revert (insufficient allowance or balance) |
-| 4 | Recording and events: `_recordStart([A, B], [verifier])` → emits DealCreated + DealStateChanged(0) | — |
+| 4 | Recording and events: `_recordStart([A, B], [verifier])` → emits DealCreated + DealStatusChanged(0) | — |
 
 ### 9.2 Internal Validations in requestVerification
 
 | # | Validation Item | Failure Handling |
 |---|-----------------|------------------|
-| 1 | Deal is in a state that allows triggering verification (ClaimedDone) | revert |
+| 1 | Deal is in a state that allows triggering verification (WaitingConfirm) | revert |
 | 2 | `msg.sender` is one of the deal's traders | revert |
 | 3 | Caller's USDC allowance and balance ≥ the fee agreed upon in the verifier's signature | revert |
-| 4 | Execute: `USDC.transferFrom(msg.sender → contract)` escrow verification fee, emit `VerifyRequest(dealIndex, verificationIndex, verifier)` | — |
+| 4 | Execute: `USDC.transferFrom(msg.sender → contract)` escrow verification fee, emit `VerificationRequested(dealIndex, verificationIndex, verifier)` | — |
 
-### 9.3 Internal Validations in onReportResult
+### 9.3 Internal Validations in onVerificationResult
 
 | # | Validation Item | Failure Handling |
 |---|-----------------|------------------|
 | 1 | Caller validation: `msg.sender` must be the VerifierContract corresponding to that verificationIndex | revert |
-| 2 | Emit `VerificationReceived(dealIndex, verificationIndex, msg.sender, result)` | — |
-| 3 | Transfer escrowed verification fee to Verifier contract | — |
-| 4 | Handle business logic based on result: | — |
-|   | `result > 0` (passed): release payment to B → DealCompleted → DealStateChanged(3) → `_recordEnd` → DealEnded | — |
-|   | `result < 0` (failed): `_emitViolated(dealIndex, partyB)` → DealStateChanged(4) → `_recordDispute` → DealDisputed | — |
-|   | `result == 0` (inconclusive): SettlingStarted → DealStateChanged(5) → enter Settling | — |
+| 2 | Status validation: deal must be in VERIFYING state | revert InvalidStatus |
+| 3 | Handle business logic based on result: | — |
+|   | `result > 0` (passed): release payment to B → DealCompleted → DealStatusChanged(11) → `_emitPhaseChanged` → DealPhaseChanged(dealIndex, 3) | — |
+|   | `result < 0` (failed): `_emitViolated(dealIndex, partyB, reason)` → DealStatusChanged(12) → `_emitPhaseChanged` → DealPhaseChanged(dealIndex, 4) | — |
+|   | `result == 0` (inconclusive): SettlingStarted → DealStatusChanged(8) → enter Settling | — |
+| 4 | Emit `VerificationReceived(dealIndex, verificationIndex, msg.sender, result)` | — |
+| 5 | Transfer escrowed verification fee to Verifier contract (**all result values**, including inconclusive) | revert TransferFailed |
+
+> **Error handling responsibility:** The DealContract is responsible for ensuring the verification fee transfer succeeds. If `onVerificationResult` fails to pay the agreed fee, `VerifierBase.reportResult()` will revert with `FeeNotReceived`, rolling back all state changes and events — leaving no on-chain trace of the error. Therefore the DealContract must always transfer the correct fee amount for every result value to avoid this silent failure.

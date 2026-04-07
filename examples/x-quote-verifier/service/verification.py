@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 from config import settings
 from models import TweetInfo, VerifyResult
-from providers.base import BaseProvider, KnownError, normalise_username
+from providers.base import BaseProvider, KnownError, normalise_user_id
 from providers.twitter_api import TwitterAPIProvider
 from providers.twitterapi_io import TwitterAPIIOProvider
 
@@ -78,7 +78,7 @@ async def _get_tweet_info(tweet_id: str) -> VerifyResult | TweetInfo | None:
 
 
 async def _verify(
-    username: str,
+    quoter_user_id: str,
     target_tweet_id: str,
     new_tweet_id: str,
     type_check: Callable[[TweetInfo], bool],
@@ -89,17 +89,20 @@ async def _verify(
         return result
 
     if result is None:
-        return VerifyResult.success(False)
+        return VerifyResult.success(False, "tweet does not exist")
 
     info: TweetInfo = result
-    norm_username = normalise_username(username)
-    verified = (
-        info.author_username == norm_username
-        and type_check(info)
-        and info.quoted_tweet_id == target_tweet_id
-    )
-    return VerifyResult.success(verified)
+    norm_user_id = normalise_user_id(quoter_user_id)
+
+    if info.author_user_id != norm_user_id:
+        return VerifyResult.success(False, "wrong author")
+    if not type_check(info):
+        return VerifyResult.success(False, "not a quote tweet")
+    if info.quoted_tweet_id != target_tweet_id:
+        return VerifyResult.success(False, "quoted wrong tweet")
+
+    return VerifyResult.success(True)
 
 
-async def has_quote(username: str, target_tweet_id: str, new_tweet_id: str) -> VerifyResult:
-    return await _verify(username, target_tweet_id, new_tweet_id, lambda i: i.is_quote)
+async def has_quote(quoter_user_id: str, target_tweet_id: str, new_tweet_id: str) -> VerifyResult:
+    return await _verify(quoter_user_id, target_tweet_id, new_tweet_id, lambda i: i.is_quote)

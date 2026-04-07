@@ -83,11 +83,11 @@ Restart your Agent (if using MCP), register on the platform, and try the XQuote 
 
 ```
 contracts/               Core abstract contracts & interfaces
-  DealContractBase.sol     Base for all deal contracts
+  DealBase.sol             Base for all deal contracts
   VerifierBase.sol         Base for all verifier contracts
-  IDealContract.sol        Deal contract interface
+  IDeal.sol                Deal contract interface
   IVerifier.sol            Verifier interface
-  IVerifierSpec.sol        Verification spec interface
+  VerifierSpec.sol         Verification spec base contract
   FeeCollector.sol         Protocol fee collection
 
 core-skills/             SyncTx interaction skills (for AI agents)
