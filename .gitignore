@@ -8,3 +8,5 @@ examples/x-quote-verifier/uv.lock
 cache/
 out/
 ext-skills/wallet/abis/
+.pytest_cache
+tests/
