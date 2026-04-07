@@ -1,8 +1,0 @@
-{
-  "imports": {
-    "viem": "npm:viem@^2",
-    "viem/": "npm:viem@^2/",
-    "@std/cli": "jsr:@std/cli@^1",
-    "@std/dotenv": "jsr:@std/dotenv@^0"
-  }
-}

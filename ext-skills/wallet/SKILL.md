@@ -1,5 +1,5 @@
 ---
-name: wallet-deno
+name: wallet
 description: >-
   Multi-chain EVM wallet — read contract state, send transactions, sign messages,
   query token balances, and interact with any verified smart contract via ABI.
