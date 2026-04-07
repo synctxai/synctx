@@ -21,6 +21,16 @@ def normalise_username(username) -> str:
     return username.lstrip("@").lower()
 
 
+def normalise_user_id(user_id) -> str:
+    """Normalize X/Twitter user_id to a canonical decimal string."""
+    if isinstance(user_id, int):
+        return str(user_id) if user_id > 0 else ""
+    if isinstance(user_id, str):
+        value = user_id.strip()
+        return value if value.isdigit() and value != "0" else ""
+    return ""
+
+
 class BaseProvider(abc.ABC):
     """All upstream API providers must implement this interface."""
 

@@ -11,7 +11,6 @@ metadata:
 - Queries public Twitter data via free APIs (no API key needed)
   - Profile: [fxtwitter](https://api.fxtwitter.com)
   - Tweet: [vxtwitter](https://api.vxtwitter.com)
-- Used to evaluate counterparty influence during XQuoteDeal negotiation
 - Pure function library in `scripts/x_helper.py`, invoked via `python3 -c`
 
 ## Functions

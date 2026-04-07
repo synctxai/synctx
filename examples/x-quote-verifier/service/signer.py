@@ -32,7 +32,7 @@ def sign_platform_message(message: str) -> str:
 
 def sign_verify_request(
     tweet_id: str,
-    quoter_username: str,
+    quoter_user_id: int,
     fee: int,
     deadline: int,
 ) -> SignResult:
@@ -44,7 +44,7 @@ def sign_verify_request(
         "domain": DOMAIN,
         "message": {
             "tweetId": tweet_id,
-            "quoterUsername": quoter_username,
+            "quoterUserId": quoter_user_id,
             "fee": fee,
             "deadline": deadline,
         },

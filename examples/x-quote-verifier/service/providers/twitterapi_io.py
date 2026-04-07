@@ -8,7 +8,7 @@ import httpx
 
 from config import settings
 from models import TweetInfo
-from .base import BaseProvider, normalise_username
+from .base import BaseProvider, normalise_username, normalise_user_id
 
 
 class TwitterAPIIOProvider(BaseProvider):
@@ -33,6 +33,12 @@ class TwitterAPIIOProvider(BaseProvider):
         tweet = tweets[0]
 
         author: str = tweet.get("author", {}).get("userName", "")
+        author_user_id = normalise_user_id(
+            tweet.get("author", {}).get("id")
+            or tweet.get("author", {}).get("userId")
+            or tweet.get("author", {}).get("rest_id")
+            or tweet.get("author", {}).get("restId")
+        )
 
         qt: Optional[Dict[str, Any]] = tweet.get("quoted_tweet")
         is_quote = isinstance(qt, dict) and len(qt) > 0
@@ -40,6 +46,7 @@ class TwitterAPIIOProvider(BaseProvider):
 
         return TweetInfo(
             author_username=normalise_username(author),
+            author_user_id=author_user_id,
             is_quote=is_quote,
             quoted_tweet_id=quoted_id,
         )
