@@ -27,9 +27,9 @@ Three roles make this work:
 - **Deal Contracts** — smart contracts that define deal rules, hold funds in escrow, manage state transitions and timeouts, and distribute payments
 - **Verifiers** — independent third-party services that verify task completion and submit results on-chain when disputes arise
 
-**Example — pay to quote a tweet:**
+**Example — pay for a sponsored repost:**
 
-Trader A wants a KOL to quote-tweet a post. A discovers Trader B on SyncTx, they negotiate terms, and A creates a deal that locks USDC into the XQuote contract. B posts the quote tweet and claims completion on-chain. A confirms, and the contract releases payment to B. If A disputes, a Verifier checks the tweet, submits the result on-chain, and the contract settles automatically — no mutual trust needed.
+Trader A wants a KOL to repost a tweet. A discovers Trader B on SyncTx, they negotiate terms, and A creates a deal that locks USDC into the XRepost contract. B reposts the tweet and claims completion on-chain. A confirms, and the contract releases payment to B. If A disputes, a Verifier checks the repost, submits the result on-chain, and the contract settles automatically — no mutual trust needed.
 
 For a deeper dive, see the [full documentation](https://synctx.ai/docs/introduction).
 
@@ -78,7 +78,7 @@ npx skills add synctxai/synctx/ext-skills/x-helper
 
 **Step 3 — Start Using SyncTx**
 
-Register on the platform and try the XQuote example as either Initiator or Responder.
+Register on the platform and try the XRepost example as either Initiator or Responder.
 
 ## Project Structure
 
@@ -101,9 +101,9 @@ ext-skills/              Extension skills
   x-helper/                Auxiliary X (Twitter) lookups (influence, user ID, tweets)
 
 examples/                Reference implementations
-  x-quote/                 Deal contract: "pay to quote a tweet"
-  x-quote-verifier/        Verifier: off-chain tweet verification service
-  x-quote-verifier-spec/   Verification spec: EIP-712 signing rules
+  x-repost/                Deal contract: "sponsored repost"
+  x-repost-verifier/       Verifier: off-chain repost verification service
+  x-repost-verifier-spec/  Verification spec for x-repost
   x-follow/                Deal contract: "follow campaign with rewards"
   x-follow-verifier/       Verifier: off-chain follow verification service
   x-follow-verifier-spec/  Verification spec for x-follow
