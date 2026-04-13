@@ -41,7 +41,7 @@ XFollowFactory (developer deploys once)
 - **Gasless:** Handled externally via Gelato 7702 Turbo relay. Contracts use plain direct calls (no BySig functions). Gas sponsored by developer's Gelato Gas Tank
 - **Lifecycle:** `createDeal()` → child enters OPEN immediately (no TESTING phase)
 - **Auto-registration:** Factory emits `SubContractCreated(address subContract)` → platform monitors factory events → auto-discovers and registers child contracts
-- **Identity:** Binding Attestation (platformSigner verification) mandatory for B
+- **Identity:** Twitter Verification (platformSigner verification) mandatory for B
 - **Protocol fee:** Per-claim, from campaign budget → developer's feeCollector
 - **Failure limit:** `MAX_FAILURES = 3` per address per campaign
 - **ReentrancyGuard:** `claim()`, `onVerificationResult()`, `resetVerification()`, `withdrawRemaining()` all have `nonReentrant` modifier (custom reentrancy guard using `_lock` pattern)
@@ -61,7 +61,7 @@ contract XFollowFactory is DealBase {
     address public immutable FEE_COLLECTOR;      // developer's fee receiver
     uint96  public immutable PROTOCOL_FEE;       // per-claim fee (e.g. 10000 = 0.01 USDC)
     address public immutable REQUIRED_SPEC;      // XFollowVerifierSpec address
-    address public immutable PLATFORM_SIGNER;    // Binding Attestation signer
+    address public immutable TWITTER_VERIFICATION; // TwitterVerification contract; may be 0 on non-OP chains (off-chain binding mode)
     address public immutable FEE_TOKEN;          // USDC address
 
     // ===================== Events =====================
@@ -81,7 +81,7 @@ contract XFollowFactory is DealBase {
         bytes calldata sig,
         uint64  target_user_id,
         uint48  deadline
-    ) external returns (address campaign);
+    ) external returns (uint256 dealIndex);
 }
 ```
 
@@ -93,7 +93,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
     // ===================== Set by initialize() =====================
 
     address public factory;              // parent factory
-    address public partyA;               // campaign creator
+    address public sponsor;              // campaign sponsor
     address public verifier;
     uint96  public rewardPerFollow;
     uint96  public verifierFee;
@@ -135,7 +135,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 
 | Method | Caller | Description |
 |--------|--------|-------------|
-| `constructor(impl, feeCollector, protocolFee, spec, bindingAttestation)` | Developer | Deploy factory with all shared config |
+| `constructor(impl, feeCollector, protocolFee, spec, twitterVerification)` | Developer | Deploy factory with all shared config |
 | `createDeal(grossAmount, verifier, verifierFee, rewardPerFollow, sigDeadline, sig, target_user_id, deadline)` | A | Clone impl → initialize with params → transfer USDC to child → emit SubContractCreated. Returns child address |
 
 ### 3.2 XFollowCampaign Functions
@@ -143,7 +143,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | Method | Caller | Description |
 |--------|--------|-------------|
 | `initialize(...)` | Factory only | Set campaign params and enter OPEN immediately. Can only be called once, only by factory |
-| `claim(userId, bindingSig)` | Any B | Verify Binding Attestation. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
+| `claim()` | Any B | Verify Twitter binding: OP chain hard-reverts via `isBound(msg.sender)`; other chains (`twitterVerification == 0`) skip the check and rely on verifier off-chain lookup. Lock claimCost from budget. Emit VerificationRequested. Return dealIndex |
 | `onVerificationResult(dealIndex, 0, result, reason)` | Verifier | result>0 → pay B; result<0 → reward to budget, failCount++; result==0 → all to budget |
 | `resetVerification(dealIndex, 0)` | Anyone | After VERIFICATION_TIMEOUT. Full claimCost returns to budget. verifierTimeoutCount++, emit VerifierTimeout event |
 | `withdrawRemaining()` | A | Only when CLOSED + pendingClaims==0. Budget → A |
@@ -169,7 +169,7 @@ contract XFollowCampaign is DealBase, ERC2771Mixin {
 | `version()` | `"5.0"` |
 | `instruction()` | Markdown guide for A and B |
 | `requiredSpecs()` | `[REQUIRED_SPEC]` (read from factory) |
-| `verificationParams(dealIndex, 0)` | specParams = abi.encode(uint64 follower_user_id, uint64 target_user_id) |
+| `verificationParams(dealIndex, 0)` | specParams = abi.encode(uint64 target_user_id). Follower identity resolved off-chain via Platform API |
 | `requestVerification(dealIndex, 0)` | Always reverts — auto-triggered by claim() |
 | `phase(dealIndex)` | 0=NotFound, 2=Active, 3=Success, 4=Failed |
 | `dealExists(dealIndex)` | Whether claim exists |
@@ -193,7 +193,7 @@ Constraint: `sigDeadline >= campaignDeadline`.
 
 ```solidity
 specParams = abi.encode(
-    uint64 follower_user_id,   // from Binding Attestation (claim parameter)
+    // follower_user_id removed — resolved off-chain via Platform API
     uint64 target_user_id      // from campaign config
 )
 ```
@@ -228,7 +228,7 @@ sequenceDiagram
 
     Note over Dev: One-time setup
     Dev->>Dev: Deploy XFollowCampaign (implementation)
-    Dev->>Dev: Deploy XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, bindingAttestation)
+    Dev->>Dev: Deploy XFollowFactory(impl, feeCollector, protocolFee,<br/>spec, twitterVerification)
     Dev->>Dev: Fund Gelato Gas Tank for gasless relay
     Dev->>P: Register factory on platform
 
@@ -247,7 +247,7 @@ sequenceDiagram
 
     Note over B,C: Claim Phase (gasless via Gelato 7702)
 
-    Note over B: 1. Complete Twitter verification, get Binding Attestation
+    Note over B: 1. Complete Twitter verification on Platform (binding stored on-chain)
     Note over B: 2. Follow target_user_id on X
     B->>C: 🟡 canClaim(B.address) → true
     B->>C: 🟢 claim() → dealIndex
@@ -355,7 +355,7 @@ flowchart TD
 campaign CLOSED          → CampaignNotOpen
 claimed[B]               → AlreadyClaimed
 failCount[B] >= 3        → MaxFailures
-invalid Binding Attestation → InvalidBindingSignature
+not bound (isBound check fails, OP mode only) → NotBound
 budget < claimCost       → auto-close → CLOSED
 has pending claim        → PendingClaim
 otherwise                → eligible
@@ -370,7 +370,7 @@ otherwise                → eligible
 ```
 Developer deploys:
   1. XFollowCampaign implementation (plain direct calls, no BySig functions)
-  2. XFollowFactory(impl, feeCollector, protocolFee, spec, bindingAttestation)
+  2. XFollowFactory(impl, feeCollector, protocolFee, spec, twitterVerification)
   3. Fund Gelato Gas Tank (gas budget for Gelato 7702 Turbo relay)
 
 Gasless is handled entirely outside the contract layer via Gelato 7702 Turbo.
@@ -469,7 +469,7 @@ After deadline + pendingClaims == 0:
 | 2 | `budget >= claimCost` | auto-close |
 | 3 | `!claimed[sender]` | AlreadyClaimed |
 | 4 | `failCount[sender] < MAX_FAILURES` | MaxFailures |
-| 5 | Binding Attestation valid (platformSigner verification) | InvalidBindingSignature |
+| 5 | Twitter binding valid: `twitterVerification.isBound(msg.sender)` (skipped when `twitterVerification == 0`) | NotBound |
 | 6 | No pending claim | PendingClaim |
 | 7 | Lock claimCost, pendingClaims++ | — |
 
@@ -485,7 +485,7 @@ After deadline + pendingClaims == 0:
 
 | # | Check | Error |
 |---|-------|-------|
-| 1 | `sender == partyA` | NotPartyA |
+| 1 | `sender == sponsor` | NotSponsor |
 | 2 | Campaign is CLOSED | NotClosed |
 | 3 | `pendingClaims == 0` | PendingClaims |
 | 4 | `budget > 0` | NoFunds |
@@ -499,3 +499,25 @@ After deadline + pendingClaims == 0:
 | `VERIFICATION_TIMEOUT` | 30 minutes | Campaign | Per-claim verifier response limit |
 | `MAX_FAILURES` | 3 | Campaign | Max failed claims per address |
 | `MIN_PROTOCOL_FEE` | 10,000 (0.01 USDC) | Factory | Minimum protocol fee at deployment |
+
+---
+
+## 11. Multi-chain Deployment Modes
+
+The contract supports two deployment modes, selected at factory construction via `twitterVerification_`:
+
+### OP chain (on-chain binding)
+- `twitterVerification_` is set to the deployed `TwitterVerification` proxy address.
+- `XFollowCampaign.claim()` hard-reverts with `NotBound` if the caller has no active Twitter binding.
+- `canClaim(addr)` reflects the binding dimension accurately — safe for UI preflight.
+
+### Other chains (off-chain binding)
+- `twitterVerification_` is set to `address(0)` at factory construction.
+- `XFollowCampaign.claim()` skips the on-chain `isBound` check; anyone can submit a claim.
+- The verifier performs the binding lookup off-chain via Platform API `POST /binding/verify` (tri-state):
+  - `ok`  → proceed to follow verification, report pass (`1`) or fail (`-1`)
+  - `not_bound` → report fail (`-1`) deterministically
+  - `error` → report inconclusive (`0`), budget fully refunded
+- `canClaim(addr)` cannot evaluate the binding dimension; UI/agent should query Platform API (`GET /binding/:address/status`) separately before prompting `claim()`.
+
+See `docs/twitter-binding-privacy.md` for the overarching privacy design; see `synctx-tools/x-verifier/src/verify/x-follow.ts` for the verifier-side tri-state implementation.

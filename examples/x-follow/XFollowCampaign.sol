@@ -5,13 +5,14 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./XFollowVerifierSpec.sol";
 import "./IERC20.sol";
-import "./BindingAttestation.sol";
+import "./TwitterVerification.sol";
+import "./FeeFormat.sol";
 
 
 /// @title XFollowCampaign - X Paid Follow Campaign Sub-contract
 /// @notice Created by XFollowFactory via EIP-1167 clone. Each instance = one campaign.
-///         A deposits budget, any user authenticated via Binding Attestation can follow and claim a fixed reward.
-///         Each B's claim() creates a new dealIndex. Fully automated, no negotiation needed.
+///         Sponsor deposits budget, any user with active Twitter binding can follow and claim a fixed reward.
+///         Each follower's claim() creates a new dealIndex. Fully automated, no negotiation needed.
 /// @dev Lifecycle: OPEN → CLOSED
 ///      No constructor — all state is set via initialize() in one call (clone compatible).
 contract XFollowCampaign is DealBase {
@@ -23,7 +24,7 @@ contract XFollowCampaign is DealBase {
 
     // ===================== Errors =====================
 
-    error NotPartyA();
+    error NotSponsor();
     error NotVerifier();
     error InvalidStatus();
     error InvalidParams();
@@ -36,7 +37,7 @@ contract XFollowCampaign is DealBase {
     error BudgetExhausted();
     error AlreadyClaimed();
     error MaxFailures();
-    error InvalidBindingSignature();
+    error NotBound();
     error PendingClaim();
     error NotClosed();
     error PendingClaims();
@@ -80,10 +81,9 @@ contract XFollowCampaign is DealBase {
     // ===================== Types =====================
 
     struct Claim {
-        address claimer;             // B's address
+        address claimer;             // follower's address
         uint48  timestamp;           // Claim creation time
         uint8   status;              // VERIFYING / COMPLETED / REJECTED / TIMED_OUT / INCONCLUSIVE
-        uint64  follower_user_id;    // Verified via Binding Attestation at claim time
     }
 
     // ===================== Constants =====================
@@ -102,11 +102,11 @@ contract XFollowCampaign is DealBase {
     address public feeCollector;
     uint96  public protocolFee;
     address public requiredSpec;
-    BindingAttestation public bindingAttestation;
+    TwitterVerification public twitterVerification;
 
     // ===================== Campaign Storage =====================
 
-    address public partyA;
+    address public sponsor;
     uint8   public campaignStatus;       // OPEN / CLOSED
     address public verifier;
     uint96  public rewardPerFollow;
@@ -126,14 +126,13 @@ contract XFollowCampaign is DealBase {
 
     mapping(uint256 => Claim) internal claims;
     mapping(address => bool)  public claimedAddress;
-    mapping(uint64  => uint8) public claimedUserId;          // 0=unclaimed 1=verifying 2=claimed
     mapping(address => uint8) public failCount;
-    mapping(address => uint256) internal pendingClaimIndex;  // B → current pending dealIndex
+    mapping(address => uint256) internal pendingClaimIndex;  // follower → current pending dealIndex
 
     // ===================== Modifiers =====================
 
-    modifier onlyA() {
-        if (msg.sender != partyA) revert NotPartyA();
+    modifier onlySponsor() {
+        if (msg.sender != sponsor) revert NotSponsor();
         _;
     }
 
@@ -157,8 +156,8 @@ contract XFollowCampaign is DealBase {
         address feeCollector_,
         uint96  protocolFee_,
         address requiredSpec_,
-        address bindingAttestation_,
-        address partyA_,
+        address twitterVerification_,
+        address sponsor_,
         address verifier_,
         uint96  rewardPerFollow_,
         uint96  verifierFee_,
@@ -177,13 +176,13 @@ contract XFollowCampaign is DealBase {
         feeCollector = feeCollector_;
         protocolFee = protocolFee_;
         requiredSpec = requiredSpec_;
-        bindingAttestation = BindingAttestation(bindingAttestation_);
+        twitterVerification = TwitterVerification(twitterVerification_);
 
         // Campaign parameter validation
         if (rewardPerFollow_ == 0) revert InvalidParams();
         if (deadline_ <= block.timestamp) revert InvalidParams();
         if (verifier_ == address(0)) revert InvalidParams();
-        if (partyA_ == verifier_) revert InvalidParams();
+        if (sponsor_ == verifier_) revert InvalidParams();
         if (verifier_.code.length == 0) revert VerifierNotContract();
         if (sig_.length == 0) revert InvalidVerifierSignature();
         if (sigDeadline_ < uint256(deadline_) + VERIFICATION_TIMEOUT) revert SignatureExpired();
@@ -194,7 +193,7 @@ contract XFollowCampaign is DealBase {
         _verifyVerifierSignature(verifier_, target_user_id_, verifierFee_, sigDeadline_, sig_);
 
         // Set up campaign (USDC already transferFrom'd by factory to this contract)
-        partyA = partyA_;
+        sponsor = sponsor_;
         campaignStatus = OPEN;
         verifier = verifier_;
         rewardPerFollow = rewardPerFollow_;
@@ -208,26 +207,21 @@ contract XFollowCampaign is DealBase {
 
     // ===================== Claim (each claim = one dealIndex) =====================
 
-    /// @notice B claims follow reward. Submits Binding Attestation to prove identity.
-    ///         claimedUserId states: 0=claimable, 1=verifying (locked), 2=successfully claimed (permanently locked).
-    ///         Failed/inconclusive auto-resets to 0; timeout requires calling resetVerification() first before retry.
-    /// @param userId B's Twitter immutable user_id
-    /// @param bindingSig Platform-issued binding attestation signature
-    function claim(uint64 userId, bytes calldata bindingSig) external nonReentrant returns (uint256 dealIndex) {
+    /// @notice Follower claims follow reward. Must have active Twitter binding on-chain.
+    function claim() external nonReentrant returns (uint256 dealIndex) {
         // Check and possibly trigger auto-close
         _checkAndClose();
         if (campaignStatus != OPEN) revert CampaignNotOpen();
 
         if (claimedAddress[msg.sender]) revert AlreadyClaimed();
-        if (claimedUserId[userId] != 0) revert AlreadyClaimed();
         if (failCount[msg.sender] >= MAX_FAILURES) revert MaxFailures();
 
         // Check for pending claim
         if (_hasPendingClaim(msg.sender)) revert PendingClaim();
 
-        // Verify Binding Attestation
-        if (!bindingAttestation.verify(msg.sender, userId, bindingSig)) revert InvalidBindingSignature();
-        uint64 followerUserId = userId;
+        // Verify Twitter binding: OP chain hard-reverts via isBound; on other chains
+        // twitterVerification is zero and the verifier performs the binding check off-chain.
+        if (address(twitterVerification) != address(0) && !twitterVerification.isBound(msg.sender)) revert NotBound();
 
         uint96 cost = _claimCost();
         if (budget < cost) {
@@ -254,11 +248,9 @@ contract XFollowCampaign is DealBase {
         claims[dealIndex] = Claim({
             claimer: msg.sender,
             timestamp: uint48(block.timestamp),
-            status: VERIFYING,
-            follower_user_id: followerUserId
+            status: VERIFYING
         });
         pendingClaimIndex[msg.sender] = dealIndex;
-        claimedUserId[followerUserId] = 1;
         pendingClaims++;
 
         _emitStatusChanged(dealIndex, VERIFYING);
@@ -289,10 +281,9 @@ contract XFollowCampaign is DealBase {
         emit VerificationReceived(dealIndex, verificationIndex, msg.sender, result);
 
         if (result > 0) {
-            // Passed: pay B
+            // Passed: pay follower
             c.status = COMPLETED;
             claimedAddress[claimer] = true;
-            claimedUserId[c.follower_user_id] = 2;
             completedClaims++;
 
             _emitStatusChanged(dealIndex, COMPLETED);
@@ -305,10 +296,9 @@ contract XFollowCampaign is DealBase {
             if (!IERC20(feeToken).transfer(feeCollector, pFee)) revert TransferFailed();
 
         } else if (result < 0) {
-            // Failed: reward + protocolFee refunded to budget, only verifierFee paid out, B violated
+            // Failed: reward + protocolFee refunded to budget, only verifierFee paid out, follower violated
             c.status = REJECTED;
             failCount[claimer]++;
-            claimedUserId[c.follower_user_id] = 0;
             budget += reward + pFee;
 
             _emitViolated(dealIndex, claimer, "follow not detected");
@@ -322,7 +312,6 @@ contract XFollowCampaign is DealBase {
         } else {
             // Inconclusive: full refund to budget, no fees deducted
             c.status = INCONCLUSIVE;
-            claimedUserId[c.follower_user_id] = 0;
             budget += reward + vFee + pFee;
 
             _emitStatusChanged(dealIndex, INCONCLUSIVE);
@@ -337,7 +326,7 @@ contract XFollowCampaign is DealBase {
 
     /// @notice Reset claim after verifier timeout, full refund to budget.
     ///         Anyone can call (permissionless cleanup).
-    ///         After reset, claimedUserId and pendingClaimIndex are unlocked, B can re-claim().
+    ///         After reset, pendingClaimIndex is unlocked, follower can re-claim().
     ///         Failed (result<0) and inconclusive (result==0) are auto-cleaned by onVerificationResult, no manual reset needed.
     function resetVerification(uint256 dealIndex, uint256 verificationIndex)
         external onlySlot0(verificationIndex) nonReentrant
@@ -349,7 +338,6 @@ contract XFollowCampaign is DealBase {
         c.status = TIMED_OUT;
         pendingClaims--;
         delete pendingClaimIndex[c.claimer];
-        claimedUserId[c.follower_user_id] = 0;
         budget += _claimCost();
         verifierTimeoutCount++;
 
@@ -363,22 +351,22 @@ contract XFollowCampaign is DealBase {
 
     // ===================== Campaign Closure =====================
 
-    /// @notice A manually closes campaign, prevents new claims, does not affect existing pending claims
-    function closeCampaign() external onlyA {
+    /// @notice Sponsor manually closes campaign, prevents new claims, does not affect existing pending claims
+    function closeCampaign() external onlySponsor {
         if (campaignStatus != OPEN) revert CampaignNotOpen();
         campaignStatus = CLOSED;
         _emitServiceModeChanged(MODE_CLOSED);
     }
 
-    /// @notice When CLOSED and no pending claims, A withdraws remaining budget
-    function withdrawRemaining() external onlyA nonReentrant {
+    /// @notice When CLOSED and no pending claims, sponsor withdraws remaining budget
+    function withdrawRemaining() external onlySponsor nonReentrant {
         if (campaignStatus != CLOSED) revert NotClosed();
         if (pendingClaims > 0) revert PendingClaims();
         if (budget == 0) revert NoFunds();
 
         uint96 amt = budget;
         budget = 0;
-        if (!IERC20(feeToken).transfer(partyA, amt)) revert TransferFailed();
+        if (!IERC20(feeToken).transfer(sponsor, amt)) revert TransferFailed();
     }
 
     // ===================== Internal Helpers =====================
@@ -436,16 +424,15 @@ contract XFollowCampaign is DealBase {
         return uint256(budget) / uint256(cost);
     }
 
-    /// @notice Whether a given address + userId can claim (including binding check)
-    function canClaim(address addr, uint64 userId, bytes calldata bindingSig) external view returns (bool) {
+    /// @notice Whether a given address can claim (including binding check)
+    function canClaim(address addr) external view returns (bool) {
         if (campaignStatus != OPEN) return false;
         if (block.timestamp > deadline) return false;
         if (budget < _claimCost()) return false;
         if (claimedAddress[addr]) return false;
-        if (claimedUserId[userId] != 0) return false;
         if (failCount[addr] >= MAX_FAILURES) return false;
         if (_hasPendingClaim(addr)) return false;
-        if (!bindingAttestation.verify(addr, userId, bindingSig)) return false;
+        if (address(twitterVerification) != address(0) && !twitterVerification.isBound(addr)) return false;
         return true;
     }
 
@@ -457,30 +444,38 @@ contract XFollowCampaign is DealBase {
     // ===================== IDeal Implementation =====================
 
     function name() external pure override returns (string memory) {
-        return "X(Twitter) Follow Campaign";
+        return "Sponsored Follow on X (Twitter)";
     }
 
     function description() external pure override returns (string memory) {
-        return "Pay fixed USDC reward per X(Twitter) follow. 1-to-many campaign, auto-verified. Twitter binding required.";
+        return
+            "Sponsored Follow Campaign\n"
+            "- Follow the target Twitter user to claim a USDC reward.\n"
+            "- Settlement & Security: USDC-settled; Twitter-binding protects the follower's reward.";
     }
 
     function tags() external pure override returns (string[] memory) {
-        string[] memory t = new string[](2);
+        string[] memory t = new string[](7);
         t[0] = "x";
         t[1] = "follow";
+        t[2] = "following";
+        t[3] = "follower";
+        t[4] = "twitter";
+        t[5] = "kol";
+        t[6] = "campaign";
         return t;
     }
 
     function version() external pure override returns (string memory) {
-        return "5.0";
+        return "1.0";
     }
 
-    function protocolFeePolicy() external pure override returns (string memory) {
-        return
-            "Per-claim protocol fee deducted from campaign budget on successful claims only. "
-            "claimCost = rewardPerFollow + verifierFee + protocolFee. "
-            "Failed claims: only verifierFee deducted. Inconclusive: full refund. "
-            "Query exact value via claimCost().";
+    function protocolFeePolicy() external view override returns (string memory) {
+        uint256 fee = uint256(protocolFee);
+        return string(abi.encodePacked(
+            "Protocol fee: ", FeeFormat.formatHuman(feeToken, fee), " (raw ", FeeFormat.toStr(fee), ") per successful claim, deducted from campaign budget on top of the follower reward. ",
+            "No protocol fee on failed or inconclusive claims."
+        ));
     }
 
     function requiredSpecs() external view override returns (address[] memory) {
@@ -496,7 +491,7 @@ contract XFollowCampaign is DealBase {
         Claim storage c = claims[dealIndex];
         if (c.claimer == address(0)) revert InvalidParams();
 
-        bytes memory specParams = abi.encode(c.follower_user_id, target_user_id);
+        bytes memory specParams = abi.encode(target_user_id);
         return (verifier, uint256(verifierFee), signatureDeadline, verifierSignature, specParams);
     }
 
@@ -539,51 +534,42 @@ contract XFollowCampaign is DealBase {
 
     function instruction() external pure override returns (string memory) {
         return
-            "# X(Twitter) Follow Campaign\n\n"
-            "Pay fixed USDC reward per follow to a target account on Twitter. 1-to-many campaign model.\n\n"
-            "- **A (Creator)**: Deposits USDC budget, sets target account and reward per follow\n"
-            "- **B (Follower)**: Follows the target account on Twitter, claims reward\n"
-            "- Verification is fully automatic; B receives reward on pass\n\n"
-            "| Item | Value |\n"
-            "|----|----|\n"
-            "| Token | USDC (decimals=6), address via `feeToken()` |\n"
-            "| Amount | Raw value x10^6, e.g. 1.5 USDC = `1500000` |\n\n"
-            "## Campaign Lifecycle\n\n"
-            "OPEN -> CLOSED\n\n"
-            "- **OPEN**: Campaign goes live immediately after initialization. Params are locked, anyone with Twitter binding can claim().\n"
-            "- **CLOSED**: A can call `closeCampaign()` at any time to stop the campaign. Also auto-triggered on deadline or budget exhaustion.\n\n"
-            "## For Followers (B)\n\n"
-            "1. Complete Twitter verification on Platform and obtain the Twitter binding signature via `twitter-binding-sig`\n"
-            "2. Follow the target account on Twitter\n"
-            "3. Call `claim(userId, bindingSig)` -- userId is your Twitter immutable user_id (uint64), bindingSig is the Twitter binding signature (bytes)\n"
-            "4. **Must** notify the verifier to begin verification (verifier address: read `verifier()`)\n"
-            "5. Wait for verification result\n\n"
-            "**Pre-flight**: Call `canClaim(addr, userId, bindingSig)` before claim() to check eligibility (address + userId dedup + binding attestation + budget).\n\n"
-            "## Costs\n\n"
-            "B pays nothing. All fees (reward + verifierFee + protocolFee) come from A's budget.\n"
-            "Query `claimCost()` for per-claim cost, `remainingSlots()` for available claims.\n\n"
-            "## Fee Policy\n\n"
-            "- Successful claim: reward to B, verifierFee to Verifier, protocolFee to Developer.\n"
-            "- Failed claim (not following): only verifierFee deducted, reward + protocolFee refunded to budget.\n"
-            "- Inconclusive (API error): full refund to budget.\n\n"
-            "## Failure Policy\n\n"
-            "Failed claims (not following) increment failCount. After 3 failures, banned from this campaign.\n"
-            "Inconclusive results (API errors) do not count as failures.\n\n"
+            "# Sponsored Follow on X (Twitter)\n\n"
+            "- Follow the target twitter user_id to claim a USDC reward.\n"
+            "- First-come-first-served; ends on deadline or when budget runs out.\n"
+            "- Verification is fully automatic; reward pays out on pass.\n\n"
+            "---\n\n"
+            "## For Followers\n\n"
+            "> **Follower binding**: Follower must have bound their X account to their wallet on Platform.\n\n"
+            "1. Call `canClaim(addr)` to check eligibility\n"
+            "2. Follow the target twitter user_id on X\n"
+            "3. Call `claim()` and notify the verifier to start verification\n"
+            "4. Wait for the result; reward is paid out automatically on pass\n\n"
+            "**Costs**: Follower pays nothing; all fees (reward + verifierFee + protocolFee) come from the sponsor's budget.\n\n"
+            "**Remaining slots**: Read `remainingSlots()` for the remaining claim count.\n\n"
+            "**Failure policy**: Failed claims (not following) increment failCount; after 3 failures, the follower is banned from this campaign. Inconclusive results (API errors) do not count as failures.\n\n"
+            "---\n\n"
+            "## For Sponsors\n\n"
+            "- **Per-claim cost**: Read `claimCost()`; budget = slots x claimCost.\n"
+            "- **Budget accounting**:\n"
+            "    - Successful claim: reward to follower, verifierFee to Verifier, protocolFee to Developer.\n"
+            "    - Failed claim (not following): only verifierFee deducted; reward + protocolFee refunded to budget.\n"
+            "    - Inconclusive (API error): full refund to budget.\n"
+            "- **Close campaign**: Call `closeCampaign()` to stop accepting claims (also auto-triggered on deadline or budget exhaustion).\n"
+            "- **Reset stuck claims**: For each claim still pending past the 30-minute verification timeout, call `resetVerification(dealIndex, 0)` to refund its budget portion.\n"
+            "- **Withdraw remaining**: Once the campaign is CLOSED and `pendingClaims == 0`, call `withdrawRemaining()` to reclaim the leftover budget.\n\n"
+            "---\n\n"
             "## dealStatus Action Guide (per-claim)\n\n"
             "Each `claim()` creates a new dealIndex. `dealStatus(dealIndex)` returns the claim's current status:\n\n"
             "| Code | Status | Action |\n"
             "|----|------|------|\n"
             "| 0 | Verifying | Wait for automatic verification result |\n"
             "| 1 | VerifierTimedOut | Anyone: `resetVerification(dealIndex, 0)` to refund budget |\n"
-            "| 2 | Completed | Reward paid to B. No action needed |\n"
-            "| 3 | Rejected | B was not following. No action (verifierFee deducted from budget) |\n"
+            "| 2 | Completed | Reward paid to the follower. No action needed |\n"
+            "| 3 | Rejected | Follower was not following the target. No action (verifierFee deducted from budget) |\n"
             "| 4 | TimedOut | Verification timed out and was reset. Budget refunded |\n"
             "| 5 | Inconclusive | API error. Budget fully refunded |\n"
             "| 255 | NotFound | Claim does not exist |\n\n"
-            "> **Timeout**: 30 minutes from claim creation. Verification that exceeds this window can be reset by anyone via `resetVerification`.\n\n"
-            "## Withdrawing Remaining Budget (A)\n\n"
-            "1. Campaign must be CLOSED (A can call `closeCampaign()` at any time, or auto-triggered on deadline/budget exhaustion)\n"
-            "2. If pending claims exist, wait for verification timeout (30 min), then call `resetVerification(dealIndex, 0)` for each\n"
-            "3. Once `pendingClaims == 0`, call `withdrawRemaining()` to reclaim budget\n";
+            "> **Timeout**: 30 minutes from claim creation. Verification that exceeds this window can be reset by anyone via `resetVerification`.\n";
     }
 }

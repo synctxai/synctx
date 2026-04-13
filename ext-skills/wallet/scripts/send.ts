@@ -1,27 +1,28 @@
 import { encodeFunctionData, formatUnits, type Address, type Hex } from "viem";
 import { getPublicClient, getAccount, getWalletClient, resolveChainId } from "./config.ts";
 import { encodeCalldata, parseSig } from "./abi.ts";
-import { relayBatch, type Call, type RelayResult } from "./relay.ts";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+interface Call {
+  to: Address;
+  value: bigint;
+  data: Hex;
+}
 
 export interface SendOptions {
   chain?: number;
   value?: string;
   approve?: string;
   dryRun?: boolean;
-  gasless?: string; // e.g. "gelato", undefined = self-pay
 }
 
 export interface SendResult {
   status: string;
   txHash?: string;
   blockNumber?: number;
-  taskId?: string;
-  gasless: boolean;
-  gasless_provider?: string;
   function: string;
   contract: string;
   chain_id: number;
@@ -136,36 +137,11 @@ export async function send(
   const calls = buildCalls(contractAddr, businessData, value, approveInfo);
   const fnSig = `${parsed.name}(${parsed.inputTypes.join(",")})`;
 
-  if (options?.gasless === "gelato") {
-    // Gasless path via Gelato relay
-    const result = await relayBatch(calls, chainId);
-    const response: SendResult = {
-      status: result.status,
-      txHash: result.txHash,
-      blockNumber: result.blockNumber,
-      taskId: result.taskId,
-      gasless: true,
-      gasless_provider: "gelato",
-      function: fnSig,
-      contract: contractAddr,
-      chain_id: chainId,
-    };
-    if (approveInfo) {
-      response.approve = {
-        token: approveInfo.token,
-        amount: approveInfo.amount.toString(),
-      };
-    }
-    return response;
-  }
-
-  // Self-pay path via walletClient
   const result = await directSend(calls, chainId, approveInfo);
   const response: SendResult = {
     status: result.status,
     txHash: result.txHash,
     blockNumber: result.blockNumber,
-    gasless: false,
     function: fnSig,
     contract: contractAddr,
     chain_id: chainId,

@@ -3,30 +3,39 @@ pragma solidity ^0.8.20;
 
 import "./DealBase.sol";
 import "./IVerifier.sol";
-import "./XQuoteVerifierSpec.sol";
+import "./XRepostVerifierSpec.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
+import "./FeeFormat.sol";
 
 
-/// @title XQuoteDealContract - X Quote Tweet Deal Contract
-/// @notice Single contract managing all deals. feeToken set via setFeeToken() once (cross-chain unified address).
+/// @title XRepostDealContract - X Repost (retweet OR quote) Deal Contract
+/// @notice Single contract managing all repost deals. Verifier accepts EITHER a native retweet
+///         OR a quote tweet. No time window — old posts count. feeToken set via setFeeToken() once.
 /// @dev USDC approve · Packed storage · Custom errors · Direct payout
 ///      Unified dealStatus — status field stores dealStatus base value directly, no internal State enum
 ///
+///      Differences vs XQuoteDealContract:
+///      - No quote_tweet_id field (Poster does not submit a repost id; verifier searches)
+///      - claimDone takes no extra argument
+///      - EIP-712 signature path binds reposter address (poster) cryptographically via XRepostVerifierSpec
+///      - specParams = abi.encode(tweet_id, poster) — no repost id
+///      - System does NOT deduplicate reposts across deals (Sponsor's judgment)
+///
 ///      Deal flow overview:
-///      1. A creates deal, deposits USDC (reward + protocolFee), specifying B and Verifier
-///      2. B accepts deal (protocolFee sent to FeeCollector at this point)
-///      3. B quotes the tweet on X, then calls claimDone to submit quote_tweet_id
-///      4. A manually confirms payment, or requests Verifier auto-verification
+///      1. Sponsor creates deal, deposits USDC (reward + protocolFee), specifying Poster and Verifier
+///      2. Poster accepts deal (protocolFee sent to FeeCollector at this point)
+///      3. Poster reposts (retweet or quote) the tweet on X, then calls claimDone
+///      4. Sponsor manually confirms payment, or requests Verifier auto-verification
 ///      5. If verification is inconclusive or Verifier times out, enters settlement phase
-contract XQuoteDealContract is DealBase, Initializable {
+contract XRepostDealContract is DealBase, Initializable {
 
     // ===================== Errors =====================
 
-    error NotPartyA();
-    error NotPartyB();
+    error NotSponsor();
+    error NotPoster();
     error NotVerifier();
-    error NotAorB();
+    error NotSponsorOrPoster();
     error InvalidStatus();
     error NotTimedOut();
     error AlreadyTimedOut();
@@ -88,12 +97,12 @@ contract XQuoteDealContract is DealBase, Initializable {
     ///      Single-verification specialization (requiredSpecs().length == 1).
     struct Deal {
         // Slot 1 (28/32 bytes)
-        address partyA;                   // 20 bytes — Party A address (initiator/payer)
+        address sponsor;                   // 20 bytes — Sponsor address (initiator/payer)
         uint48  stageTimestamp;           // 6 bytes  — Current stage start time
         uint8   status;                   // 1 byte   — dealStatus base value
-        bool    isRequesterA;             // 1 byte   — Whether verification requester is A (for timeout refund)
+        bool    isRequesterSponsor;             // 1 byte   — Whether verification requester is Sponsor (for timeout refund)
         // Slot 2
-        address partyB;                   // 20 bytes — Party B address (executor/quoter)
+        address poster;                   // 20 bytes — Poster address (executor/reposter)
         uint96  amount;                   // 12 bytes — Escrowed amount (grossAmount - protocolFee)
         // Slot 3 — Verifier info (slot 0)
         address verifier;                 // 20 bytes — Verifier contract address
@@ -104,15 +113,14 @@ contract XQuoteDealContract is DealBase, Initializable {
         // Slot 5 — Signature deadline (slot 0)
         uint256 signatureDeadline;
         // Dynamic types (each occupies independent storage slots)
-        string  tweet_id;                 // Tweet ID to be quoted
-        string  quote_tweet_id;           // B's quote tweet ID, set by claimDone
+        string  tweet_id;                 // Tweet ID to be reposted
         bytes   verifierSignature;        // EIP-712 signature (slot 0, 65 bytes)
     }
 
     /// @dev Settlement proposal, only used in Settling state
     struct Settlement {
         address proposer;     // 20 bytes — Proposer
-        uint96  amountToA;    // 12 bytes — Proposed amount for A (remainder goes to B)
+        uint96  amountToSponsor;    // 12 bytes — Proposed amount for Sponsor (remainder goes to Poster)
         uint256 version;      // Proposal version, incremented on each proposal
     }
 
@@ -133,18 +141,18 @@ contract XQuoteDealContract is DealBase, Initializable {
     uint256 private _lock = 1;
 
     mapping(uint256 => Deal) internal deals;
-    mapping(uint256 => Settlement) internal settlementByA;
-    mapping(uint256 => Settlement) internal settlementByB;
+    mapping(uint256 => Settlement) internal settlementBySponsor;
+    mapping(uint256 => Settlement) internal settlementByPoster;
 
     // ===================== Modifiers =====================
 
-    modifier onlyA(uint256 dealIndex) {
-        if (msg.sender != deals[dealIndex].partyA) revert NotPartyA();
+    modifier onlySponsor(uint256 dealIndex) {
+        if (msg.sender != deals[dealIndex].sponsor) revert NotSponsor();
         _;
     }
 
-    modifier onlyB(uint256 dealIndex) {
-        if (msg.sender != deals[dealIndex].partyB) revert NotPartyB();
+    modifier onlyPoster(uint256 dealIndex) {
+        if (msg.sender != deals[dealIndex].poster) revert NotPoster();
         _;
     }
 
@@ -187,8 +195,9 @@ contract XQuoteDealContract is DealBase, Initializable {
     // ===================== Create Deal =====================
 
     /// @notice Create a deal (requires pre-approved USDC)
+    /// @dev The verifier signature is bound to `poster` (reposter) via XRepostVerifierSpec.check().
     function createDeal(
-        address partyB,
+        address poster,
         uint96  grossAmount,
         address verifier,
         uint96  verifierFee,
@@ -200,18 +209,18 @@ contract XQuoteDealContract is DealBase, Initializable {
         if (feeToken == address(0)) revert FeeTokenNotSet();
         if (grossAmount <= PROTOCOL_FEE) revert InvalidParams();
         if (verifierFee > grossAmount - PROTOCOL_FEE) revert InvalidParams();
-        if (partyB == address(0)) revert InvalidParams();
-        if (msg.sender == partyB) revert InvalidParams();
+        if (poster == address(0)) revert InvalidParams();
+        if (msg.sender == poster) revert InvalidParams();
 
         if (verifier == address(0)) revert InvalidParams();
-        if (msg.sender == verifier || partyB == verifier) revert InvalidParams();
+        if (msg.sender == verifier || poster == verifier) revert InvalidParams();
         if (verifier.code.length == 0) revert VerifierNotContract();
         if (sig.length == 0) revert InvalidVerifierSignature();
         if (deadline < block.timestamp) revert SignatureExpired();
 
         if (bytes(tweet_id).length == 0) revert InvalidParams();
 
-        _verifyVerifierSignature(verifier, tweet_id, partyB, verifierFee, deadline, sig);
+        _verifyVerifierSignature(verifier, tweet_id, poster, verifierFee, deadline, sig);
 
         // --- Transfer USDC to escrow ---
         if (!IERC20(feeToken).transferFrom(msg.sender, address(this), grossAmount)) revert TransferFailed();
@@ -220,7 +229,7 @@ contract XQuoteDealContract is DealBase, Initializable {
         {
             address[] memory traders = new address[](2);
             traders[0] = msg.sender;
-            traders[1] = partyB;
+            traders[1] = poster;
             address[] memory verifiers = new address[](1);
             verifiers[0] = verifier;
             dealIndex = _recordStart(traders, verifiers);
@@ -228,8 +237,8 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         {
             Deal storage d = deals[dealIndex];
-            d.partyA = msg.sender;
-            d.partyB = partyB;
+            d.sponsor = msg.sender;
+            d.poster = poster;
             d.verifier = verifier;
             d.amount = grossAmount - PROTOCOL_FEE;
             d.verifierFee = verifierFee;
@@ -245,13 +254,13 @@ contract XQuoteDealContract is DealBase, Initializable {
 
     // ===================== Core Flow =====================
 
-    /// @notice B accepts the deal
+    /// @notice Poster accepts the deal
     function accept(uint256 dealIndex)
         external
         nonReentrant
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyB) revert NotPartyB();
+        if (msg.sender != d.poster) revert NotPoster();
         if (d.status != WAITING_ACCEPT) revert InvalidStatus();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
@@ -265,32 +274,29 @@ contract XQuoteDealContract is DealBase, Initializable {
         if (!IERC20(feeToken).transfer(FEE_COLLECTOR, fee)) revert TransferFailed();
     }
 
-    /// @notice B declares the quote is done, submits quote_tweet_id
-    function claimDone(uint256 dealIndex, string calldata quote_tweet_id)
+    /// @notice Poster declares the repost is done (no tweet id required — verifier searches)
+    function claimDone(uint256 dealIndex)
         external
         nonReentrant
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyB) revert NotPartyB();
+        if (msg.sender != d.poster) revert NotPoster();
         if (d.status != WAITING_CLAIM) revert InvalidStatus();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
-        if (bytes(quote_tweet_id).length == 0) revert InvalidParams();
-
-        d.quote_tweet_id = quote_tweet_id;
         d.status = WAITING_CONFIRM;
         d.stageTimestamp = uint48(block.timestamp);
 
         _emitStatusChanged(dealIndex, WAITING_CONFIRM);
     }
 
-    /// @notice A manually confirms and pays B directly (skipping verification)
+    /// @notice Sponsor manually confirms and pays Poster directly (skipping verification)
     function confirmAndPay(uint256 dealIndex)
         external
         nonReentrant
     {
         Deal storage d = deals[dealIndex];
-        if (msg.sender != d.partyA) revert NotPartyA();
+        if (msg.sender != d.sponsor) revert NotSponsor();
         if (d.status != WAITING_CONFIRM) revert InvalidStatus();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
@@ -301,16 +307,16 @@ contract XQuoteDealContract is DealBase, Initializable {
         _emitStatusChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
 
-        if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
+        if (!IERC20(feeToken).transfer(d.poster, amt)) revert TransferFailed();
     }
 
     // ===================== Cancel (WAITING_ACCEPT → CANCELLED) =====================
 
-    /// @notice A cancels a deal that B has not yet accepted (WAITING_ACCEPT + timed out)
+    /// @notice Sponsor cancels a deal that Poster has not yet accepted (WAITING_ACCEPT + timed out)
     function cancelDeal(uint256 dealIndex)
         external
         nonReentrant
-        onlyA(dealIndex)
+        onlySponsor(dealIndex)
         atStatus(dealIndex, WAITING_ACCEPT)
     {
         if (!_isStageTimedOut(dealIndex)) revert NotTimedOut();
@@ -324,7 +330,7 @@ contract XQuoteDealContract is DealBase, Initializable {
         _emitStatusChanged(dealIndex, CANCELLED);
 
         if (amt > 0) {
-            if (!IERC20(feeToken).transfer(d.partyA, amt)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(d.sponsor, amt)) revert TransferFailed();
         }
     }
 
@@ -340,7 +346,7 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         Deal storage d = deals[dealIndex];
         if (d.status != WAITING_CONFIRM) revert InvalidStatus();
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        if (msg.sender != d.sponsor && msg.sender != d.poster) revert NotSponsorOrPoster();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
 
         uint96 fee = d.verifierFee;
@@ -348,7 +354,7 @@ contract XQuoteDealContract is DealBase, Initializable {
 
         // CEI: state changes first
         d.status = VERIFYING;
-        d.isRequesterA = (msg.sender == d.partyA);
+        d.isRequesterSponsor = (msg.sender == d.sponsor);
         d.verificationTimestamp = uint48(block.timestamp);
 
         emit VerificationRequested(dealIndex, verificationIndex, verifier);
@@ -357,8 +363,8 @@ contract XQuoteDealContract is DealBase, Initializable {
     }
 
     /// @notice Verifier submits verification result
-    /// @dev result > 0 → passed, pay B
-    ///      result < 0 → failed, B violated
+    /// @dev result > 0 → passed, pay Poster
+    ///      result < 0 → failed, Poster violated
     ///      result == 0 → inconclusive, enter settlement
     function onVerificationResult(uint256 dealIndex, uint256 verificationIndex, int8 result, string calldata reason) external nonReentrant override onlySlot0(verificationIndex) {
         Deal storage d = deals[dealIndex];
@@ -371,15 +377,15 @@ contract XQuoteDealContract is DealBase, Initializable {
         d.verificationTimestamp = 0;
 
         uint96 vFee = d.verifierFee;
-        uint96 transferToB = 0;
+        uint96 transferToPoster = 0;
 
         if (result > 0) {
-            transferToB = d.amount;
+            transferToPoster = d.amount;
             d.amount = 0;
             d.status = COMPLETED;
         } else if (result < 0) {
             d.status = VIOLATED;
-            d.violator = d.partyB;
+            d.violator = d.poster;
         } else {
             d.status = SETTLING;
             d.stageTimestamp = uint48(block.timestamp);
@@ -392,7 +398,7 @@ contract XQuoteDealContract is DealBase, Initializable {
             _emitStatusChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
         } else if (result < 0) {
-            _emitViolated(dealIndex, d.partyB, reason);
+            _emitViolated(dealIndex, d.poster, reason);
             _emitStatusChanged(dealIndex, VIOLATED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
         } else {
@@ -403,14 +409,14 @@ contract XQuoteDealContract is DealBase, Initializable {
         if (vFee > 0) {
             if (result == 0) {
                 // inconclusive — verifier did not complete work, refund verifierFee to requester
-                address requester = d.isRequesterA ? d.partyA : d.partyB;
+                address requester = d.isRequesterSponsor ? d.sponsor : d.poster;
                 if (!IERC20(feeToken).transfer(requester, vFee)) revert TransferFailed();
             } else {
                 if (!IERC20(feeToken).transfer(msg.sender, vFee)) revert TransferFailed();
             }
         }
-        if (transferToB > 0) {
-            if (!IERC20(feeToken).transfer(d.partyB, transferToB)) revert TransferFailed();
+        if (transferToPoster > 0) {
+            if (!IERC20(feeToken).transfer(d.poster, transferToPoster)) revert TransferFailed();
         }
     }
 
@@ -425,11 +431,11 @@ contract XQuoteDealContract is DealBase, Initializable {
     {
         Deal storage d = deals[dealIndex];
         address sender = msg.sender;
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (sender != d.sponsor && sender != d.poster) revert NotSponsorOrPoster();
         if (block.timestamp <= uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT)
             revert VerificationNotTimedOut();
 
-        address requester = d.isRequesterA ? d.partyA : d.partyB;
+        address requester = d.isRequesterSponsor ? d.sponsor : d.poster;
         uint96 vFee = d.verifierFee;
 
         // CEI: state changes first
@@ -447,35 +453,35 @@ contract XQuoteDealContract is DealBase, Initializable {
 
     // ===================== Settlement =====================
 
-    /// @notice Propose a settlement: amountToA is the amount for A (remainder goes to B)
-    /// @dev Dual-proposal mode: A/B each maintain independent proposals, no overwriting. New proposals blocked after 12h.
+    /// @notice Propose a settlement: amountToSponsor is the amount for Sponsor (remainder goes to Poster)
+    /// @dev Dual-proposal mode: Sponsor/Poster each maintain independent proposals, no overwriting. New proposals blocked after 12h.
     ///      Version incremented on each proposal; expectedVersion required on confirm to prevent front-running.
-    function proposeSettlement(uint256 dealIndex, uint96 amountToA)
+    function proposeSettlement(uint256 dealIndex, uint96 amountToSponsor)
         external
         nonReentrant
     {
         Deal storage d = deals[dealIndex];
         if (d.status != SETTLING) revert InvalidStatus();
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        if (msg.sender != d.sponsor && msg.sender != d.poster) revert NotSponsorOrPoster();
         if (_isStageTimedOut(dealIndex)) revert AlreadyTimedOut();
-        if (amountToA > d.amount) revert InvalidSettlement();
+        if (amountToSponsor > d.amount) revert InvalidSettlement();
 
         uint256 newVersion;
-        if (msg.sender == d.partyA) {
-            Settlement storage s = settlementByA[dealIndex];
+        if (msg.sender == d.sponsor) {
+            Settlement storage s = settlementBySponsor[dealIndex];
             s.proposer = msg.sender;
-            s.amountToA = amountToA;
+            s.amountToSponsor = amountToSponsor;
             s.version += 1;
             newVersion = s.version;
         } else {
-            Settlement storage s = settlementByB[dealIndex];
+            Settlement storage s = settlementByPoster[dealIndex];
             s.proposer = msg.sender;
-            s.amountToA = amountToA;
+            s.amountToSponsor = amountToSponsor;
             s.version += 1;
             newVersion = s.version;
         }
 
-        emit SettlementProposed(dealIndex, msg.sender, amountToA, newVersion);
+        emit SettlementProposed(dealIndex, msg.sender, amountToSponsor, newVersion);
     }
 
     /// @notice Confirm counterparty's settlement proposal
@@ -487,10 +493,10 @@ contract XQuoteDealContract is DealBase, Initializable {
     {
         Deal storage d = deals[dealIndex];
         if (d.status != SETTLING) revert InvalidStatus();
-        if (msg.sender != d.partyA && msg.sender != d.partyB) revert NotAorB();
+        if (msg.sender != d.sponsor && msg.sender != d.poster) revert NotSponsorOrPoster();
 
         // Get counterparty's proposal
-        Settlement storage stl = (msg.sender == d.partyA) ? settlementByB[dealIndex] : settlementByA[dealIndex];
+        Settlement storage stl = (msg.sender == d.sponsor) ? settlementByPoster[dealIndex] : settlementBySponsor[dealIndex];
         if (stl.proposer == address(0)) revert InvalidSettlement();
         if (stl.version != expectedVersion) revert VersionMismatch();
 
@@ -498,22 +504,22 @@ contract XQuoteDealContract is DealBase, Initializable {
         uint256 graceDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT + CONFIRM_GRACE_PERIOD;
         if (block.timestamp > graceDeadline) revert AlreadyTimedOut();
 
-        uint96 toA = stl.amountToA;
-        uint96 toB = d.amount - toA;
+        uint96 toSponsor = stl.amountToSponsor;
+        uint96 toPoster = d.amount - toSponsor;
         d.amount = 0;
         d.status = COMPLETED;
 
-        delete settlementByA[dealIndex];
-        delete settlementByB[dealIndex];
+        delete settlementBySponsor[dealIndex];
+        delete settlementByPoster[dealIndex];
 
         _emitStatusChanged(dealIndex, COMPLETED);
         _emitPhaseChanged(dealIndex, 3); // → Success
 
-        if (toA > 0) {
-            if (!IERC20(feeToken).transfer(d.partyA, toA)) revert TransferFailed();
+        if (toSponsor > 0) {
+            if (!IERC20(feeToken).transfer(d.sponsor, toSponsor)) revert TransferFailed();
         }
-        if (toB > 0) {
-            if (!IERC20(feeToken).transfer(d.partyB, toB)) revert TransferFailed();
+        if (toPoster > 0) {
+            if (!IERC20(feeToken).transfer(d.poster, toPoster)) revert TransferFailed();
         }
     }
 
@@ -526,11 +532,11 @@ contract XQuoteDealContract is DealBase, Initializable {
     {
         Deal storage d = deals[dealIndex];
         address sender = msg.sender;
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (sender != d.sponsor && sender != d.poster) revert NotSponsorOrPoster();
 
         uint256 settlingDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT;
-        bool hasProposal = settlementByA[dealIndex].proposer != address(0)
-                        || settlementByB[dealIndex].proposer != address(0);
+        bool hasProposal = settlementBySponsor[dealIndex].proposer != address(0)
+                        || settlementByPoster[dealIndex].proposer != address(0);
 
         if (hasProposal) {
             if (block.timestamp <= settlingDeadline + CONFIRM_GRACE_PERIOD) revert SettlementNotTimedOut();
@@ -541,8 +547,8 @@ contract XQuoteDealContract is DealBase, Initializable {
         uint96 seized = d.amount;
         d.amount = 0;
         d.status = FORFEITED;
-        delete settlementByA[dealIndex];
-        delete settlementByB[dealIndex];
+        delete settlementBySponsor[dealIndex];
+        delete settlementByPoster[dealIndex];
 
         _emitStatusChanged(dealIndex, FORFEITED);
         _emitPhaseChanged(dealIndex, 4); // → Failed
@@ -555,8 +561,8 @@ contract XQuoteDealContract is DealBase, Initializable {
     // ===================== Timeout =====================
 
     /// @notice Trigger timeout for current stage
-    /// @dev WAITING_CLAIM timeout: B didn't claimDone → B violated
-    ///      WAITING_CONFIRM timeout: A didn't confirm → auto-pay B
+    /// @dev WAITING_CLAIM timeout: Poster didn't claimDone → Poster violated
+    ///      WAITING_CONFIRM timeout: Sponsor didn't confirm → auto-pay Poster
     function triggerTimeout(uint256 dealIndex) external nonReentrant {
         Deal storage d = deals[dealIndex];
         if (!_isStageTimedOut(dealIndex)) revert NotTimedOut();
@@ -564,23 +570,23 @@ contract XQuoteDealContract is DealBase, Initializable {
         uint8 s = d.status;
 
         if (s == WAITING_CLAIM) {
-            // B didn't claimDone → B violated
-            if (msg.sender != d.partyA) revert NotPartyA();
+            // Poster didn't claimDone → Poster violated
+            if (msg.sender != d.sponsor) revert NotSponsor();
             d.status = VIOLATED;
-            d.violator = d.partyB;
-            _emitViolated(dealIndex, d.partyB, "claim timeout");
+            d.violator = d.poster;
+            _emitViolated(dealIndex, d.poster, "claim timeout");
             _emitStatusChanged(dealIndex, VIOLATED);
             _emitPhaseChanged(dealIndex, 4); // → Failed
 
         } else if (s == WAITING_CONFIRM) {
-            // A didn't confirm → auto-pay B
-            if (msg.sender != d.partyB) revert NotPartyB();
+            // Sponsor didn't confirm → auto-pay Poster
+            if (msg.sender != d.poster) revert NotPoster();
             uint96 amt = d.amount;
             d.amount = 0;
             d.status = COMPLETED;
             _emitStatusChanged(dealIndex, COMPLETED);
             _emitPhaseChanged(dealIndex, 3); // → Success
-            if (!IERC20(feeToken).transfer(d.partyB, amt)) revert TransferFailed();
+            if (!IERC20(feeToken).transfer(d.poster, amt)) revert TransferFailed();
 
         } else {
             revert InvalidStatus();
@@ -591,7 +597,7 @@ contract XQuoteDealContract is DealBase, Initializable {
     function withdraw(uint256 dealIndex) external nonReentrant atStatus(dealIndex, VIOLATED) {
         Deal storage d = deals[dealIndex];
         address sender = msg.sender;
-        if (sender != d.partyA && sender != d.partyB) revert NotAorB();
+        if (sender != d.sponsor && sender != d.poster) revert NotSponsorOrPoster();
         if (sender == d.violator) revert ViolatorCannot();
         if (d.amount == 0) revert NoFunds();
 
@@ -606,15 +612,15 @@ contract XQuoteDealContract is DealBase, Initializable {
     function _verifyVerifierSignature(
         address verifier,
         string calldata tweet_id,
-        address quoterAddress,
+        address reposterAddress,
         uint96 fee,
         uint256 deadline,
         bytes calldata sig
     ) internal view {
         address verifierSpec = IVerifier(verifier).spec();
         if (verifierSpec != REQUIRED_SPEC) revert InvalidSpecAddress();
-        address recovered = XQuoteVerifierSpec(verifierSpec).check(
-            verifier, tweet_id, quoterAddress, uint256(fee), deadline, sig
+        address recovered = XRepostVerifierSpec(verifierSpec).check(
+            verifier, tweet_id, reposterAddress, uint256(fee), deadline, sig
         );
         if (recovered != IVerifier(verifier).signer()) revert InvalidVerifierSignature();
     }
@@ -635,8 +641,8 @@ contract XQuoteDealContract is DealBase, Initializable {
         if (d.status == VERIFYING && d.verificationTimestamp > 0) {
             deadline_ = uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT;
         } else if (d.status == SETTLING) {
-            bool hasProposal = settlementByA[dealIndex].proposer != address(0)
-                            || settlementByB[dealIndex].proposer != address(0);
+            bool hasProposal = settlementBySponsor[dealIndex].proposer != address(0)
+                            || settlementByPoster[dealIndex].proposer != address(0);
             deadline_ = uint256(d.stageTimestamp) + SETTLING_TIMEOUT + (hasProposal ? CONFIRM_GRACE_PERIOD : 0);
         } else {
             deadline_ = uint256(d.stageTimestamp) + STAGE_TIMEOUT;
@@ -654,22 +660,22 @@ contract XQuoteDealContract is DealBase, Initializable {
 
     /// @notice Get both parties' settlement proposal info
     function settlement(uint256 dealIndex) external view returns (
-        uint96  proposalByA_amountToA,
-        uint96  proposalByB_amountToA,
-        bool    hasProposalA,
-        bool    hasProposalB,
-        uint256 settlementVersionA,
-        uint256 settlementVersionB
+        uint96  proposalBySponsor_amountToSponsor,
+        uint96  proposalByPoster_amountToSponsor,
+        bool    hasProposalSponsor,
+        bool    hasProposalPoster,
+        uint256 settlementVersionSponsor,
+        uint256 settlementVersionPoster
     ) {
-        Settlement storage stlA = settlementByA[dealIndex];
-        Settlement storage stlB = settlementByB[dealIndex];
+        Settlement storage stlSponsor = settlementBySponsor[dealIndex];
+        Settlement storage stlPoster = settlementByPoster[dealIndex];
         return (
-            stlA.amountToA,
-            stlB.amountToA,
-            stlA.proposer != address(0),
-            stlB.proposer != address(0),
-            stlA.version,
-            stlB.version
+            stlSponsor.amountToSponsor,
+            stlPoster.amountToSponsor,
+            stlSponsor.proposer != address(0),
+            stlPoster.proposer != address(0),
+            stlSponsor.version,
+            stlPoster.version
         );
     }
 
@@ -681,37 +687,43 @@ contract XQuoteDealContract is DealBase, Initializable {
     // ===================== Standard Identity =====================
 
     function name() external pure override returns (string memory) {
-        return "X Quote Tweet Deal";
+        return "Sponsored Repost on X (Twitter)";
     }
 
     function description() external pure override returns (string memory) {
-        return "Pay USDC to get a tweet quoted on X (Twitter). 2-party USDC settlement. Quoter binding verified off-chain.";
+        return
+            "Sponsored Repost Contract\n"
+            "- Sponsor: Commission a poster to promote a tweet.\n"
+            "- Poster: Repost or quote the tweet to claim the reward.\n"
+            "- Settlement & Security: USDC-settled; Twitter-binding ensures exclusive delivery.";
     }
 
     function tags() external pure override returns (string[] memory) {
-        string[] memory t = new string[](5);
+        string[] memory t = new string[](7);
         t[0] = "x";
-        t[1] = "quote";
-        t[2] = "twitter";
-        t[3] = "kol";
-        t[4] = "tweet";
+        t[1] = "repost";
+        t[2] = "retweet";
+        t[3] = "quote";
+        t[4] = "twitter";
+        t[5] = "kol";
+        t[6] = "tweet";
         return t;
     }
 
     function version() external pure override returns (string memory) {
-        return "5.0";
+        return "1.0";
     }
 
     function protocolFee() external view returns (uint96) {
         return PROTOCOL_FEE;
     }
 
-    function protocolFeePolicy() external pure override returns (string memory) {
-        return
-            "Fixed protocol fee per deal. "
-            "A pays grossAmount = reward + protocolFee on createDeal. "
-            "Fee is sent to FeeCollector when B calls accept; fully refunded if cancelled before accept. "
-            "Query exact value via protocolFee().";
+    function protocolFeePolicy() external view override returns (string memory) {
+        uint256 fee = uint256(PROTOCOL_FEE);
+        return string(abi.encodePacked(
+            FeeFormat.formatHuman(feeToken, fee), " per deal (raw ", FeeFormat.toStr(fee), "). ",
+            "Locked at createDeal(), charged on Poster accept(), refunded if cancelDeal() is called before accept()."
+        ));
     }
 
     // ===================== Verification Query =====================
@@ -734,9 +746,9 @@ contract XQuoteDealContract is DealBase, Initializable {
         )
     {
         Deal storage d = deals[dealIndex];
-        if (d.partyA == address(0)) revert InvalidParams();
+        if (d.sponsor == address(0)) revert InvalidParams();
 
-        specParams = abi.encode(d.tweet_id, d.quote_tweet_id, d.partyB);
+        specParams = abi.encode(d.tweet_id, d.poster);
 
         return (d.verifier, uint256(d.verifierFee), d.signatureDeadline, d.verifierSignature, specParams);
     }
@@ -745,52 +757,54 @@ contract XQuoteDealContract is DealBase, Initializable {
 
     function instruction() external pure override returns (string memory) {
         return
-            "# X Quote Tweet Deal\n\n"
-            "Pay USDC to get a tweet quoted on X. 2-party (payer + quoter). On-chain verifier for auto-completion or manual confirm. 30min stage timeout, settlement on dispute.\n\n"
-            "- **A (Initiator)**: Specifies a tweet + deposits USDC reward\n"
-            "- **B (Executor)**: Quotes the tweet on X\n"
-            "- After A manually confirms or verifier auto-verifies, B receives the reward\n\n"
-            "| Item | Value |\n"
-            "|----|----|\n"
-            "| Token | USDC (decimals=6), address via `feeToken()` |\n"
-            "| Amount | Raw value x10^6, e.g. 1.5 USDC = `1500000` |\n\n"
-            "## Price Negotiation\n\n"
-            "Before creating a deal, A and B negotiate B's reward (net amount):\n\n"
-            "- **A (Offer)**: Evaluate based on B's follower count, engagement rate, etc.\n"
-            "- **B (Evaluate)**: Judge whether the offer is fair; counter-offer if not.\n"
-            "- Either party may walk away if the price is unacceptable.\n\n"
+            "# Sponsored Repost on X (Twitter)\n\n"
+            "A USDC-settled contract where a Sponsor commissions a Poster to promote a tweet on X.\n\n"
+            "- **Sponsor**: Specifies a tweet and deposits USDC reward.\n"
+            "- **Poster**: Retweets or quotes the tweet on X.\n"
+            "- Once Sponsor manually confirms, or the verifier auto-verifies, Poster claims the reward.\n\n"
+            "> **Amounts**: USDC raw `uint96` integers, decimals=6 (e.g. `1500000` = 1.5 USDC). Token address via `feeToken()`.\n\n"
+            "## Before createDeal\n\n"
+            "> **Poster binding**: Poster must have completed Twitter binding on the platform.\n\n"
+            "### 1. Price Negotiation (off-chain)\n\n"
+            "Sponsor and Poster negotiate the reward (net amount) via the platform message channel:\n\n"
+            "- **Sponsor (Offer)**: Self-assess the Poster's value by follower count, engagement rate, content fit, etc.\n"
+            "- **Poster (Evaluate)**: Self-judge whether the price and the tweet content are acceptable; counter-offer if not.\n"
+            "- Both parties may iterate on the price with multiple rounds of counter-offers.\n"
+            "- Either party may walk away if the price is unacceptable.\n"
+            "- Outcome: an agreed `reward` (Poster's net income) and `tweet_id`.\n"
+            "- Constraint: `reward >= verifierFee` -- keeps dispute cost bounded by deal value so either side has incentive to push verification through.\n\n"
+            "### 2. On-chain Preparation\n\n"
+            "With price agreed, Sponsor prepares funds and signature:\n\n"
+            "1. Call `protocolFee()` to get the protocol fee, then compute `grossAmount = reward + protocolFee`.\n"
+            "2. Ensure USDC allowance covers `grossAmount + verifierFee`. Rationale:\n"
+            "   - `grossAmount` (reward + protocolFee) is locked in the contract at `createDeal`.\n"
+            "   - `verifierFee` is **not** locked at `createDeal`; it is pulled later from whoever calls `requestVerification` on the dispute path (typically Sponsor). That party must still hold `verifierFee` balance + allowance at that moment, so Sponsor approves it up front for convenience.\n"
+            "3. Obtain verifier signature via `request_sign`, passing `{tweet_id, reposter_address}` (the Poster's address). The returned `sig` is bound to that exact address along with `fee` and `deadline`.\n\n"
+            "Ready: `sig`, `verifierFee`, `deadline`, and sufficient USDC allowance -- call `createDeal`.\n\n"
             "## createDeal Parameters\n\n"
             "| Parameter | Type | Description |\n"
             "|------|------|------|\n"
-            "| partyB | address | Executor (quoter) address |\n"
-            "| grossAmount | uint96 | Negotiated reward + protocol fee (USDC raw value). Call `protocolFee()` to get the fee, then grossAmount = reward + fee |\n"
+            "| poster | address | Poster address. |\n"
+            "| grossAmount | uint96 | Negotiated reward + protocol fee (USDC raw value). See Before createDeal. |\n"
             "| verifier | address | Verifier contract address |\n"
-            "| verifierFee | uint96 | Verification fee (USDC raw value). Must satisfy `verifierFee <= reward` (i.e. `verifierFee <= grossAmount - protocolFee`); if the verifier's quoted fee exceeds the negotiated reward, raise the reward before calling `createDeal` |\n"
+            "| verifierFee | uint96 | Verification fee (USDC raw value). Must satisfy `verifierFee <= reward`. |\n"
             "| deadline | uint256 | Verifier signature validity (Unix seconds) |\n"
-            "| sig | bytes | Verifier EIP-712 signature |\n"
-            "| tweet_id | string | Tweet ID to be quoted |\n\n"
-            "> `verifierFee` is not escrowed at `createDeal`; it is pulled from whoever calls `requestVerification` on the dispute path. A must approve `reward + protocolFee + verifierFee` up front and keep `verifierFee` liquid for the full deal lifetime.\n\n"
-            "**Prerequisites**:\n"
-            "1. B must complete Twitter binding on the platform before the deal is created (verifier checks binding status off-chain when signing)\n"
-            "2. B must ensure they have NOT quoted the target tweet before the deal is created. If B has already quoted it, the verifier will reject the task and B will not receive the reward\n"
-            "3. A should maintain their own record of which quoters have already quoted the target tweet, to prevent the same quoter from creating duplicate deals for the same tweet\n"
-            "4. Both parties have agreed on B's reward and tweet_id. A calls `protocolFee()` to get the protocol fee, grossAmount = reward + protocol fee\n"
-            "5. USDC `approve(contract address, reward + protocol fee + verification fee)`, i.e., grossAmount + verifierFee\n"
-            "6. Obtain verifier signature via `request_sign` (sig + fee)\n\n"
-            "> On creation, `grossAmount` is transferred to the contract in full; the protocol fee is only sent to `FeeCollector` after B calls `accept`. If B does not accept and the deal is cancelled, both protocol fee and reward are refunded to A.\n\n"
+            "| sig | bytes | Verifier EIP-712 signature attesting to the committed verification data (tweet_id, poster, fee, deadline) |\n"
+            "| tweet_id | string | Tweet ID to be reposted |\n\n"
+            "> On creation, `grossAmount` is transferred to the contract in full; the protocol fee is only collected after Poster calls `accept`. If Poster does not accept and the deal is cancelled, both protocol fee and reward are refunded to Sponsor.\n\n"
             "## dealStatus Action Guide\n\n"
-            "`dealStatus(dealIndex)` returns the current status (unified, same for all callers). Refer to the table below for actions:\n\n"
-            "| Code | Status | A's Action | B's Action |\n"
+            "After `createDeal`, record the returned `dealIndex`; drive the rest of the flow by reading `dealStatus(dealIndex)` and acting per the table below.\n\n"
+            "| Code | Status | Sponsor's Action | Poster's Action |\n"
             "|----|------|------|------|\n"
-            "| 0 | WaitingAccept | Wait for B | `accept(dealIndex)` |\n"
+            "| 0 | WaitingAccept | Wait for Poster | Review the deal, then `accept(dealIndex)` |\n"
             "| 1 | AcceptTimedOut | `cancelDeal(dealIndex)` | -- |\n"
-            "| 2 | WaitingClaim | Wait for B | Quote tweet, then `claimDone(dealIndex, quote_tweet_id)` |\n"
+            "| 2 | WaitingClaim | Wait for Poster | Retweet or quote the tweet, then `claimDone(dealIndex)` |\n"
             "| 3 | ClaimTimedOut | `triggerTimeout(dealIndex)` | -- |\n"
-            "| 4 | WaitingConfirm | `confirmAndPay(dealIndex)` or `requestVerification(dealIndex, 0)` | Wait for A |\n"
+            "| 4 | WaitingConfirm | `confirmAndPay(dealIndex)` or `requestVerification(dealIndex, 0)` | Wait for Sponsor, or `requestVerification(dealIndex, 0)` if Sponsor is unresponsive |\n"
             "| 5 | ConfirmTimedOut | -- | `triggerTimeout(dealIndex)` |\n"
             "| 6 | Verifying | Wait | Wait |\n"
             "| 7 | VerifierTimedOut | `resetVerification(dealIndex, 0)` | `resetVerification(dealIndex, 0)` |\n"
-            "| 8 | Settling | `proposeSettlement(dealIndex, amountToA)` | `proposeSettlement(dealIndex, amountToA)` |\n"
+            "| 8 | Settling | `proposeSettlement(dealIndex, amountToSponsor)` | `proposeSettlement(dealIndex, amountToSponsor)` |\n"
             "| 9 | SettlementProposed | `confirmSettlement(dealIndex, expectedVersion)` to accept counterparty's proposal, or update own proposal | `confirmSettlement(dealIndex, expectedVersion)` to accept counterparty's proposal, or update own proposal |\n"
             "| 10 | SettlementTimedOut | `triggerSettlementTimeout(dealIndex)` | `triggerSettlementTimeout(dealIndex)` |\n"
             "| 11 | Completed | -- | -- |\n"
@@ -798,13 +812,20 @@ contract XQuoteDealContract is DealBase, Initializable {
             "| 13 | Cancelled | -- | -- |\n"
             "| 14 | Forfeited | -- (funds seized to protocol) | -- (funds seized to protocol) |\n"
             "| 255 | NotFound | Deal does not exist | Deal does not exist |\n\n"
-            "> **Timeouts**: 30 minutes per stage (Settling: 12 hours). Use `timeRemaining(dealIndex)` to query remaining seconds.\n\n"
-            "> **Settlement timeout (code 10)**: After 12 hours, new proposals are blocked. If any proposal exists, a 1-hour grace period allows `confirmSettlement` only. After the grace period (or immediately if no proposals), `triggerSettlementTimeout` forfeits all funds to the protocol.\n\n"
-            "> **Verification flow (code 4)**:\n"
-            "> 1. `requestVerification(dealIndex, 0)`\n"
-            "> 2. **Must** notify the verifier to begin verification\n"
-            "> 3. Passed: auto-payment to B; failed: B is in breach. Verification fee is non-refundable.\n\n"
-            "> **Settlement semantics (code 8/9)**: Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToA)`, amountToA is **the amount A receives** (x10^6); the remainder goes to B. Call `settlement(dealIndex)` to query proposals and their version numbers. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the counterparty's version from `settlement()` as expectedVersion.\n";
+            "## Notes\n\n"
+            "### Timeouts\n\n"
+            "30 minutes per stage (Settling: 12 hours). The settlement phase is entered only on inconclusive verification or verifier timeout. Use `timeRemaining(dealIndex)` to query remaining seconds.\n\n"
+            "### Verification flow (code 4)\n\n"
+            "1. `requestVerification(dealIndex, 0)`\n"
+            "2. **Must** notify the verifier to begin verification\n"
+            "3. Passed: auto-payment to Poster; failed: Poster is in breach. On pass/fail the verification fee is paid to the verifier (non-refundable). On inconclusive (result=0) or verifier timeout (`resetVerification`), the verification fee is refunded to the requester.\n"
+            "4. On `WaitingConfirm`, Sponsor has NOT yet seen the specific repost on-chain (the deal does not carry a repost id). If Sponsor wants evidence, Sponsor must call `requestVerification` -- the verifier will report matching repost details off-chain via the platform message channel.\n\n"
+            "### Settlement (code 8/9/10)\n\n"
+            "Each party maintains their own proposal independently. In `proposeSettlement(dealIndex, amountToSponsor)`, amountToSponsor is **the amount Sponsor receives** (x10^6); the remainder goes to Poster. Call `settlement(dealIndex)` to query proposals and their version numbers. `confirmSettlement(dealIndex, expectedVersion)` accepts the counterparty's proposal; pass the counterparty's version from `settlement()` as expectedVersion.\n\n"
+            "After 12 hours, new proposals are blocked. If any proposal exists, a 1-hour grace period allows `confirmSettlement` only. After the grace period (or immediately if no proposals), `triggerSettlementTimeout` forfeits all funds to the protocol.\n\n"
+            "---\n\n"
+            "**Both repost (retweet) and quote count as valid.**\n\n"
+            "**Sponsor owns Poster selection and tracks sponsorship history to avoid repeat abuse.**\n";
     }
 
     // ===================== Status Query =====================
@@ -813,7 +834,7 @@ contract XQuoteDealContract is DealBase, Initializable {
     /// @dev 0=NotFound, 1=Pending, 2=Active, 3=Success, 4=Failed, 5=Cancelled
     function phase(uint256 dealIndex) external view override returns (uint8) {
         Deal storage d = deals[dealIndex];
-        if (d.partyA == address(0)) return 0; // NotFound
+        if (d.sponsor == address(0)) return 0; // NotFound
 
         uint8 s = d.status;
         if (s == WAITING_ACCEPT) return 1;   // Pending
@@ -828,37 +849,28 @@ contract XQuoteDealContract is DealBase, Initializable {
     /// @dev Storage base value combined with runtime conditions (timeout, proposals) derives full status codes 0-14, 255
     function dealStatus(uint256 dealIndex) external view override returns (uint8) {
         Deal storage d = deals[dealIndex];
-        if (d.partyA == address(0)) return NOT_FOUND;
+        if (d.sponsor == address(0)) return NOT_FOUND;
 
         uint8 s = d.status;
 
-        // WAITING_ACCEPT (0) → may time out (1)
         if (s == WAITING_ACCEPT) {
             return _isStageTimedOut(dealIndex) ? ACCEPT_TIMED_OUT : WAITING_ACCEPT;
         }
-
-        // WAITING_CLAIM (2) → may time out (3)
         if (s == WAITING_CLAIM) {
             return _isStageTimedOut(dealIndex) ? CLAIM_TIMED_OUT : WAITING_CLAIM;
         }
-
-        // WAITING_CONFIRM (4) → may time out (5)
         if (s == WAITING_CONFIRM) {
             return _isStageTimedOut(dealIndex) ? CONFIRM_TIMED_OUT : WAITING_CONFIRM;
         }
-
-        // VERIFYING (6) → may verifier time out (7)
         if (s == VERIFYING) {
             if (block.timestamp > uint256(d.verificationTimestamp) + VERIFICATION_TIMEOUT) {
                 return VERIFIER_TIMED_OUT;
             }
             return VERIFYING;
         }
-
-        // SETTLING (8) → may have proposal (9) or time out (10)
         if (s == SETTLING) {
-            bool hasProposal = settlementByA[dealIndex].proposer != address(0)
-                            || settlementByB[dealIndex].proposer != address(0);
+            bool hasProposal = settlementBySponsor[dealIndex].proposer != address(0)
+                            || settlementByPoster[dealIndex].proposer != address(0);
             uint256 settlingDeadline = uint256(d.stageTimestamp) + SETTLING_TIMEOUT;
             if (hasProposal) {
                 if (block.timestamp > settlingDeadline + CONFIRM_GRACE_PERIOD) return SETTLEMENT_TIMED_OUT;
@@ -869,12 +881,11 @@ contract XQuoteDealContract is DealBase, Initializable {
             return SETTLING;
         }
 
-        // Terminal states: COMPLETED (11), VIOLATED (12), CANCELLED (13), FORFEITED (14)
         return s;
     }
 
     /// @notice Whether a deal with the given index exists
     function dealExists(uint256 dealIndex) external view override returns (bool) {
-        return deals[dealIndex].partyA != address(0);
+        return deals[dealIndex].sponsor != address(0);
     }
 }

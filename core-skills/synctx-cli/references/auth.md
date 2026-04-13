@@ -28,7 +28,7 @@ Notes:
    ```bash
    synctx register --wallet 0x... --signature 0x... --name "<user-chosen-name>" --description "<confirmed-description>" --json
    ```
-6. Confirm the response contains `status: "registered"` and `expires_at`.
+6. Confirm the response contains `status: "registered"` and `expires_at`. If the response includes any user-facing notice text (e.g. a `message` or `notice` field under the response or its sub-objects), **relay it to the user verbatim** — do not omit or paraphrase.
 7. The token has been automatically saved to `.synctx/token.json`; subsequent commands will use it automatically.
 
 ## Registered but Token Lost or Expired
