@@ -24,9 +24,12 @@ metadata:
 
 ## 1. On Load
 
-When this skill is first loaded, **immediately** run `check-wallet` before doing anything else:
+When this skill is first loaded, determine `WALLET_DIR` — the **absolute path** to the directory containing this SKILL.md — and **immediately** run `check-wallet` before doing anything else. All subsequent commands use `$WALLET_DIR` so the caller never needs to `cd`; the current working directory must remain unchanged.
 
 ```bash
+# WALLET_DIR = absolute path to this skill's directory (set once, reuse everywhere)
+WALLET_DIR="/absolute/path/to/this/skill"
+
 # Check deno availability; fall back to ~/.deno/bin/deno if PATH is missing
 if ! command -v deno &>/dev/null; then
   if [ -x "$HOME/.deno/bin/deno" ]; then
@@ -37,10 +40,12 @@ if ! command -v deno &>/dev/null; then
   fi
 fi
 
-deno run -P scripts/run.ts check-wallet
+deno run -P "$WALLET_DIR/scripts/run.ts" check-wallet
 ```
 
-> **Deno path fallback**: if a later command fails with `command not found: deno`, retry **once** using the explicit path `$HOME/.deno/bin/deno run -P scripts/run.ts ...`. Once that works, keep using `$HOME/.deno/bin/deno` for the rest of the session — do **not** prepend `export PATH=...` to every command, since each bash call is a fresh subshell and `export` does not persist.
+> **Deno path fallback**: if a later command fails with `command not found: deno`, retry **once** using the explicit path `$HOME/.deno/bin/deno run -P "$WALLET_DIR/scripts/run.ts" ...`. Once that works, keep using `$HOME/.deno/bin/deno` for the rest of the session — do **not** prepend `export PATH=...` to every command, since each bash call is a fresh subshell and `export` does not persist.
+>
+> **Important**: never `cd` into `$WALLET_DIR`. All commands use absolute paths via `$WALLET_DIR` so the working directory is not affected.
 
 Based on the result:
 
@@ -77,9 +82,9 @@ If `PRIVATE_KEY` is missing, automatically run `generate-wallet` and inform the 
 ### Balance
 
 ```bash
-deno run -P scripts/run.ts balance                                   # All 4 chains: ETH + USDC
-deno run -P scripts/run.ts balance --chain 8453                      # Single chain: ETH + USDC
-deno run -P scripts/run.ts balance --token 0xTOKEN --chain 8453      # Specific ERC20 on specific chain
+deno run -P "$WALLET_DIR/scripts/run.ts" balance                                   # All 4 chains: ETH + USDC
+deno run -P "$WALLET_DIR/scripts/run.ts" balance --chain 8453                      # Single chain: ETH + USDC
+deno run -P "$WALLET_DIR/scripts/run.ts" balance --token 0xTOKEN --chain 8453      # Specific ERC20 on specific chain
 ```
 
 ### Contract Read
@@ -87,8 +92,8 @@ deno run -P scripts/run.ts balance --token 0xTOKEN --chain 8453      # Specific 
 Function signature format: `name(inputTypes)->(outputTypes)`.
 
 ```bash
-deno run -P scripts/run.ts read CONTRACT "balanceOf(address)->(uint256)" --args '["0xOwner"]' --chain 8453
-deno run -P scripts/run.ts read CONTRACT "name()->(string)"
+deno run -P "$WALLET_DIR/scripts/run.ts" read CONTRACT "balanceOf(address)->(uint256)" --args '["0xOwner"]' --chain 8453
+deno run -P "$WALLET_DIR/scripts/run.ts" read CONTRACT "name()->(string)"
 ```
 
 Arguments are passed as a JSON array via `--args`. Omit `--args` when there are no parameters. Use `--from 0xAddress` when the view function depends on `msg.sender`.
@@ -99,24 +104,24 @@ All writes go through the `send` command. When a call requires token approval, u
 
 ```bash
 # Basic write
-deno run -P scripts/run.ts send CONTRACT "fn(uint256)" --args '["42"]'
+deno run -P "$WALLET_DIR/scripts/run.ts" send CONTRACT "fn(uint256)" --args '["42"]'
 
 # With token approval (two txs: approve then call)
-deno run -P scripts/run.ts send CONTRACT "createDeal(address,uint96)" \
+deno run -P "$WALLET_DIR/scripts/run.ts" send CONTRACT "createDeal(address,uint96)" \
   --args '["0x...", "1000000"]' --approve 0xUSDC:1000000
 
 # Preview without submitting
-deno run -P scripts/run.ts send CONTRACT "fn()" --dry-run
+deno run -P "$WALLET_DIR/scripts/run.ts" send CONTRACT "fn()" --dry-run
 
 # With ETH value (rare)
-deno run -P scripts/run.ts send CONTRACT "fn()" --value 1000000000000000000
+deno run -P "$WALLET_DIR/scripts/run.ts" send CONTRACT "fn()" --value 1000000000000000000
 ```
 
 ### Signing
 
 ```bash
-deno run -P scripts/run.ts sign "hello world"                                    # EIP-191
-deno run -P scripts/run.ts sign-typed '{"domain":{...},"types":{...},...}'       # EIP-712
+deno run -P "$WALLET_DIR/scripts/run.ts" sign "hello world"                                    # EIP-191
+deno run -P "$WALLET_DIR/scripts/run.ts" sign-typed '{"domain":{...},"types":{...},...}'       # EIP-712
 ```
 
 ### ABI Discovery & Decoding
@@ -130,8 +135,8 @@ deno run -P scripts/run.ts sign-typed '{"domain":{...},"types":{...},...}'      
 ### Utilities
 
 ```bash
-deno run -P scripts/run.ts to-raw 1.5 --decimals 6          # → 1500000
-deno run -P scripts/run.ts fmt 1500000 --decimals 6 --symbol USDC  # → "1.5 USDC"
+deno run -P "$WALLET_DIR/scripts/run.ts" to-raw 1.5 --decimals 6          # → 1500000
+deno run -P "$WALLET_DIR/scripts/run.ts" fmt 1500000 --decimals 6 --symbol USDC  # → "1.5 USDC"
 ```
 
 ## 4. Workflow: Unknown Contract Interaction
@@ -150,11 +155,11 @@ If `list-functions` returns `{"error":"ABI not found ..."}`, the contract is lik
 
 ```bash
 # 1. Read the proxy's implementation pointer
-deno run -P scripts/run.ts read PROXY "IMPLEMENTATION()->(address)" --chain 8453
+deno run -P "$WALLET_DIR/scripts/run.ts" read PROXY "IMPLEMENTATION()->(address)" --chain 8453
 # Other common names: implementation(), getImplementation(), masterCopy()
 
 # 2. Discover functions on the implementation
-deno run -P scripts/run.ts list-functions IMPL_ADDR --chain 8453
+deno run -P "$WALLET_DIR/scripts/run.ts" list-functions IMPL_ADDR --chain 8453
 
 # 3. Read/send on the ORIGINAL PROXY address using the impl's signatures
 ```
@@ -182,7 +187,7 @@ An EIP-712 signature binds to **every field** of the signed struct. If any bound
 ```bash
 DEADLINE=$(($(date +%s) + 3600))
 SIG=$(synctx request-sign --deadline $DEADLINE ...)
-deno run -P scripts/run.ts send CONTRACT "fn(...)" --args '[..., "'$DEADLINE'", ..., "'$SIG'"]'
+deno run -P "$WALLET_DIR/scripts/run.ts" send CONTRACT "fn(...)" --args '[..., "'$DEADLINE'", ..., "'$SIG'"]'
 ```
 
 **Verifier-signature workflow**: when a contract function takes `(bytes signature, uint deadline)` or similar (e.g. `fulfillWithVerifierSig`), obtain the signature via `synctx request-sign --deadline $DEADLINE --verifier 0x...` first, then pass the same `$DEADLINE` to `send`. The verifier address and counterparty are typically given by the user or read from `requiredSpecs()`.
@@ -193,11 +198,11 @@ Before calling any contract method that moves tokens (e.g. `createDeal`), **alwa
 
 ```bash
 # 1. Check current allowance
-deno run -P scripts/run.ts read TOKEN "allowance(address,address)->(uint256)" \
+deno run -P "$WALLET_DIR/scripts/run.ts" read TOKEN "allowance(address,address)->(uint256)" \
   --args '["0xOwnerAddr","0xSpenderContract"]' --chain 8453
 
 # 2. Approve then call (two separate transactions)
-deno run -P scripts/run.ts send CONTRACT "createDeal(...)" --args '[...]' \
+deno run -P "$WALLET_DIR/scripts/run.ts" send CONTRACT "createDeal(...)" --args '[...]' \
   --approve 0xUSDC:AMOUNT
 ```
 
