@@ -91,7 +91,8 @@ contracts/               Core abstract contracts & interfaces
   IVerifier.sol            Verifier interface
   FeeCollector.sol         Protocol fee collection
   TwitterVerification.sol  Privacy-preserving wallet ↔ X (Twitter) binding (on-chain commitment)
-  proxy/                   UUPS proxy infrastructure (ERC1967Proxy, UUPSUpgradeable)
+  ERC1967Proxy.sol         Minimal UUPS-compatible proxy
+  UUPSUpgradeable.sol      UUPS upgrade logic mixin
 
 core-skills/             SyncTx interaction skills (for AI agents)
   synctx-cli/              CLI-based orchestration
