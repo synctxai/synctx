@@ -111,7 +111,7 @@ examples/                Reference implementations
 
 ## Chain Support
 
-Primarily deployed on Base (8453). Also supports Optimism (10), Arbitrum (42161), and Ethereum mainnet (1). More chains will be added soon.
+Primarily deployed on Optimism (10). Also supports Base (8453), Arbitrum (42161), and Ethereum mainnet (1). More chains will be added soon.
 
 ## Security
 
