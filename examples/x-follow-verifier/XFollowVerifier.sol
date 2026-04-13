@@ -38,8 +38,8 @@ contract XFollowVerifier is VerifierBase {
     /// @inheritdoc IVerifier
     function description() external pure override(VerifierBase) returns (string memory) {
         return
-            "Verify follow relationships on X (Twitter) for campaign model. "
-            "EIP-712 signed, max sign deadline 30 days (2592000s).";
+            "Verifies whether a given address's bound X(Twitter) account is following target_user_id. "
+            "EIP-712 signed. Verifier signatures expire within 30 days (2592000s) of issuance.";
     }
 
     /// @inheritdoc IVerifier

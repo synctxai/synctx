@@ -13,6 +13,10 @@ metadata:
   - Tweet: [vxtwitter](https://api.vxtwitter.com)
 - Pure function library in `scripts/x_helper.py`, invoked via `python3 -c`
 
+## When to use (mandatory)
+
+Any time the user asks for **live data about a Twitter/X user or tweet** — follower count, profile description, tweet text, like/retweet count, whether one tweet quoted another — **you MUST call the relevant `x_helper.py` function via `python3 -c`** rather than answering from memory. Twitter data changes constantly; cached/training-data answers are stale and incorrect. Triggers: "how many followers does elonmusk have", "what does @vitalik's bio say", "did @alice quote tweet X", "show tweet 12345 text", "follower count".
+
 ## Functions
 
 ### x_helper.py
@@ -34,6 +38,10 @@ metadata:
 - No timeline endpoint available — cannot list a user's recent tweets
 - `engagement_rate` calculation not supported (requires recent tweet list)
 - `has_quoted` requires the caller to supply the `quote_tweet_id` (cannot scan timeline)
+
+## Failure handling
+
+If `lookup()` / `get_tweet()` / `has_quoted()` raises an exception (`fxtwitter unavailable`, network error, 5xx, etc.), the upstream API is down. **Do NOT retry more than once** — the script already attempts a fallback internally. Report the failure to the user with the original error message and stop. Spamming retries wastes calls and won't fix an upstream outage.
 
 ## Examples
 

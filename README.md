@@ -90,7 +90,8 @@ contracts/               Core abstract contracts & interfaces
   IDeal.sol                Deal contract interface
   IVerifier.sol            Verifier interface
   FeeCollector.sol         Protocol fee collection
-  BindingAttestation.sol   Wallet ↔ X (Twitter) account binding attestation
+  TwitterVerification.sol  Privacy-preserving wallet ↔ X (Twitter) binding (on-chain commitment)
+  proxy/                   UUPS proxy infrastructure (ERC1967Proxy, UUPSUpgradeable)
 
 core-skills/             SyncTx interaction skills (for AI agents)
   synctx-cli/              CLI-based orchestration

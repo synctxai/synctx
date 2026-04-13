@@ -16,7 +16,6 @@ import { send } from "./send.ts";
 import { signMessage, signTypedData } from "./sign.ts";
 import { listFunctions } from "./abi.ts";
 import { decodeLogs, decodeRevert } from "./decode.ts";
-import { getRelayStatus } from "./relay.ts";
 import { serialize } from "./abi.ts";
 
 // ---------------------------------------------------------------------------
@@ -40,7 +39,7 @@ function fail(code: number, message: string): never {
 // Force all positional args to string to prevent 0x... addresses being parsed as numbers
 const rawArgs = Deno.args.map(a => a);
 const args = parseArgs(rawArgs, {
-  string: ["chain", "token", "args", "from", "approve", "value", "decimals", "symbol", "contract", "gasless", "_"],
+  string: ["chain", "token", "args", "from", "approve", "value", "decimals", "symbol", "contract", "_"],
   boolean: ["dry-run", "help"],
   alias: { h: "help" },
 });
@@ -58,7 +57,7 @@ Commands:
   address                   Show wallet address
   balance                   Query ETH + USDC balances
   read CONTRACT SIG         Read contract (view/pure)
-  send CONTRACT SIG         Write to contract (gasless via relay or self-pay)
+  send CONTRACT SIG         Write to contract
   sign MESSAGE              EIP-191 personal sign
   sign-typed JSON           EIP-712 typed data sign
   list-functions CONTRACT   List contract functions
@@ -66,7 +65,6 @@ Commands:
   decode-revert HEX_DATA    Decode revert data
   to-raw AMOUNT             Convert human amount to raw
   fmt RAW_AMOUNT            Format raw amount to human
-  relay-status TASK_ID      Check Gelato relay task status
 
 Options:
   --chain <id>              Chain ID (default: 8453)
@@ -74,7 +72,6 @@ Options:
   --from <address>          Caller address for read operations
   --approve TOKEN:AMOUNT    Approve token before send (7702 batch)
   --value <wei>             ETH value to send
-  --gasless <provider>      Gasless provider (e.g. "gelato"); omit for self-pay
   --dry-run                 Preview without submitting
   --decimals <n>            Decimals for to-raw/fmt
   --symbol <s>              Symbol for fmt
@@ -132,7 +129,6 @@ try {
         value: args.value,
         approve: args.approve,
         dryRun: args["dry-run"],
-        gasless: args.gasless,
       });
       ok(result);
       break;
@@ -209,14 +205,6 @@ try {
         decimals,
         ...(symbol ? { symbol } : {}),
       });
-      break;
-    }
-
-    case "relay-status": {
-      const taskId = args._[1] as string;
-      if (!taskId) fail(2, "Usage: relay-status TASK_ID");
-      const result = await getRelayStatus(taskId);
-      ok(result);
       break;
     }
 
