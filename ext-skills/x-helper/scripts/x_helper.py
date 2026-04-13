@@ -183,6 +183,17 @@ def has_quoted(username: str, target_tweet_id: str, quote_tweet_id: str) -> dict
 
 
 if __name__ == "__main__":
-    import sys
-    name = sys.argv[1] if len(sys.argv) > 1 else "elonmusk"
-    print(lookup(name))
+    import json, sys
+
+    usage = "Usage: x_helper.py user <username> | tweet <tweet_id> | has-quoted <username> <target_tweet_id> <quote_tweet_id>"
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if cmd == "user" and len(sys.argv) >= 3:
+        print(json.dumps(lookup(sys.argv[2])))
+    elif cmd == "tweet" and len(sys.argv) >= 3:
+        print(json.dumps(get_tweet(sys.argv[2])))
+    elif cmd == "has-quoted" and len(sys.argv) >= 5:
+        print(json.dumps(has_quoted(sys.argv[2], sys.argv[3], sys.argv[4])))
+    else:
+        print(usage, file=sys.stderr)
+        sys.exit(1)

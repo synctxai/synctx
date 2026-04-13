@@ -7,13 +7,13 @@ import "./VerifierSpec.sol";
 /// @notice Business specification contract for X/Twitter follow relationship verification.
 /// @dev Defines check() with EIP-712 signature verification.
 ///      check signature params (per-campaign): target_user_id(uint64)
-///      specParams (per-claim verification): abi.encode(follower_user_id(uint64), target_user_id(uint64))
-///      Off-chain verification queries external follow-relationship providers
+///      specParams (per-claim verification): abi.encode(target_user_id(uint64))
+///      Follower identity resolved off-chain by verifier
 contract XFollowVerifierSpec is VerifierSpec {
 
     // ============ Constants ============
     // Signature is per-campaign: Verifier commits to verifying follow relationships for a given target_user_id.
-    // follower_user_id is not in the signature (each claim has a different follower, provided by B's Binding Attestation).
+    // follower_user_id is not in the signature or specParams (resolved via Platform API).
 
     bytes32 public constant VERIFY_TYPEHASH = keccak256(
         "Verify(uint64 targetUserId,uint256 fee,uint256 deadline)"
@@ -23,21 +23,22 @@ contract XFollowVerifierSpec is VerifierSpec {
 
     /// @inheritdoc VerifierSpec
     function name() external pure override returns (string memory) {
-        return "X Follow Verifier Spec";
+        return "X(Twitter) Follow Verifier Spec";
     }
 
     /// @inheritdoc VerifierSpec
     function version() external pure override returns (string memory) {
-        return "3.0";
+        return "1.0";
     }
 
     /// @inheritdoc VerifierSpec
     function description() external pure override returns (string memory) {
         return
-            "X/Twitter follow verification spec (campaign model). EIP-712 signature check. "
-            "Result type: Boolean (1=yes, -1=no). "
-            "Signature: per-campaign, signs target_user_id + fee + deadline. "
-            "specParams: abi.encode(follower_user_id, target_user_id).";
+            "Verifies whether a given address's bound X(Twitter) account is following target_user_id. "
+            "The follower's X identity is resolved via on-chain twitter binding; the verifier performs the follow check off-chain. "
+            "EIP-712 signature check. Result type: 1=pass, -1=fail, 0=inconclusive. "
+            "request_sign params: {target_user_id}. "
+            "specParams: abi.encode(target_user_id).";
     }
 
     // ============ Signature Verification ============

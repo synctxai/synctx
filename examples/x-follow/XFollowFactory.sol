@@ -5,8 +5,9 @@ import "./DealBase.sol";
 import "./IVerifier.sol";
 import "./IERC20.sol";
 import "./Initializable.sol";
-import "./BindingAttestation.sol";
+import "./TwitterVerification.sol";
 import "./Clones.sol";
+import "./FeeFormat.sol";
 import "./XFollowCampaign.sol";
 
 
@@ -45,8 +46,8 @@ contract XFollowFactory is DealBase, Initializable {
     /// @notice Allowed VerifierSpec address
     address public immutable REQUIRED_SPEC;
 
-    /// @notice Binding Attestation verification contract
-    BindingAttestation public immutable BINDING_ATTESTATION;
+    /// @notice Twitter Verification contract (on-chain binding)
+    TwitterVerification public immutable TWITTER_VERIFICATION;
 
     // ===================== Reentrancy Guard =====================
 
@@ -73,7 +74,7 @@ contract XFollowFactory is DealBase, Initializable {
         address feeCollector_,
         uint96  protocolFee_,
         address requiredSpec_,
-        address bindingAttestation_
+        address twitterVerification_
     ) {
         _setInitializer(); // for Initializable.setFeeToken()
 
@@ -81,13 +82,15 @@ contract XFollowFactory is DealBase, Initializable {
         if (feeCollector_ == address(0) || feeCollector_.code.length == 0) revert InvalidParams();
         if (protocolFee_ < MIN_PROTOCOL_FEE) revert InvalidParams();
         if (requiredSpec_ == address(0) || requiredSpec_.code.length == 0) revert InvalidParams();
-        if (bindingAttestation_ == address(0) || bindingAttestation_.code.length == 0) revert InvalidParams();
+        // twitterVerification_ may be zero on non-OP chains (off-chain binding mode).
+        // When non-zero it must be a deployed contract.
+        if (twitterVerification_ != address(0) && twitterVerification_.code.length == 0) revert InvalidParams();
 
         IMPLEMENTATION = implementation_;
         FEE_COLLECTOR = feeCollector_;
         PROTOCOL_FEE = protocolFee_;
         REQUIRED_SPEC = requiredSpec_;
-        BINDING_ATTESTATION = BindingAttestation(bindingAttestation_);
+        TWITTER_VERIFICATION = TwitterVerification(twitterVerification_);
     }
 
     // ===================== Campaign Creation =====================
@@ -101,7 +104,7 @@ contract XFollowFactory is DealBase, Initializable {
     /// @param sig Verifier's EIP-712 signature
     /// @param target_user_id_ Target Twitter user_id
     /// @param deadline_ Campaign end time
-    /// @return campaign The newly created XFollowCampaign address
+    /// @return dealIndex The index of the newly created deal
     function createDeal(
         uint96  grossAmount,
         address verifier_,
@@ -111,14 +114,14 @@ contract XFollowFactory is DealBase, Initializable {
         bytes calldata sig,
         uint64  target_user_id_,
         uint48  deadline_
-    ) external nonReentrant returns (address campaign) {
+    ) external nonReentrant returns (uint256 dealIndex) {
         if (feeToken == address(0)) revert FeeTokenNotSet();
 
         // Basic validation (detailed validation done by campaign.initialize)
         if (grossAmount < rewardPerFollow_ + verifierFee_ + PROTOCOL_FEE) revert InsufficientBudget();
 
         // 1. Clone
-        campaign = Clones.clone(IMPLEMENTATION);
+        address campaign = Clones.clone(IMPLEMENTATION);
 
         // 2. Transfer USDC from A to campaign
         if (!IERC20(feeToken).transferFrom(msg.sender, campaign, grossAmount)) revert TransferFailed();
@@ -129,8 +132,8 @@ contract XFollowFactory is DealBase, Initializable {
             FEE_COLLECTOR,
             PROTOCOL_FEE,
             REQUIRED_SPEC,
-            address(BINDING_ATTESTATION),
-            msg.sender,         // partyA
+            address(TWITTER_VERIFICATION),
+            msg.sender,         // sponsor
             verifier_,
             rewardPerFollow_,
             verifierFee_,
@@ -146,8 +149,8 @@ contract XFollowFactory is DealBase, Initializable {
         traders[0] = msg.sender;
         address[] memory verifiers = new address[](1);
         verifiers[0] = verifier_;
-        uint256 campaignIndex = _recordStart(traders, verifiers);
-        campaigns[campaignIndex] = campaign;
+        dealIndex = _recordStart(traders, verifiers);
+        campaigns[dealIndex] = campaign;
 
         // 5. Platform auto-discovery
         emit SubContractCreated(campaign);
@@ -156,32 +159,39 @@ contract XFollowFactory is DealBase, Initializable {
     // ===================== IDeal Implementation (Factory Level) =====================
 
     function name() external pure override returns (string memory) {
-        return "X(Twitter) Follow Campaign Builder";
+        return "Follow Campaign Launcher on X (Twitter)";
     }
 
     function description() external pure override returns (string memory) {
-        return "Create X(Twitter) Follow Campaigns. Pay followers fixed USDC rewards for following your Twitter account.";
+        return
+            "Follow Campaign Launcher\n"
+            "- Deploys a new Sponsored Follow Campaign per call.\n"
+            "- Each campaign locks budget, target twitter user_id and verifier at creation.";
     }
 
     function tags() external pure override returns (string[] memory) {
-        string[] memory t = new string[](5);
-        t[0] = "x";
-        t[1] = "follow";
-        t[2] = "twitter";
-        t[3] = "kol";
-        t[4] = "campaign";
+        string[] memory t = new string[](8);
+        t[0] = "launcher";
+        t[1] = "x";
+        t[2] = "follow";
+        t[3] = "twitter";
+        t[4] = "kol";
+        t[5] = "campaign";
+        t[6] = "following";
+        t[7] = "follower";
         return t;
     }
 
     function version() external pure override returns (string memory) {
-        return "5.0";
+        return "1.0";
     }
 
-    function protocolFeePolicy() external pure override returns (string memory) {
-        return
-            "No upfront fee at campaign creation. "
-            "Per-claim protocol fee deducted from campaign budget on successful claims only. "
-            "Failed claims: only verifierFee deducted. Inconclusive: full refund.";
+    function protocolFeePolicy() external view override returns (string memory) {
+        uint256 fee = uint256(PROTOCOL_FEE);
+        return string(abi.encodePacked(
+            "Protocol fee: ", FeeFormat.formatHuman(feeToken, fee), " (raw ", FeeFormat.toStr(fee), ") per successful claim, deducted from campaign budget on top of the follower reward. ",
+            "No protocol fee on failed or inconclusive claims."
+        ));
     }
 
     function requiredSpecs() external view override returns (address[] memory) {
@@ -221,8 +231,12 @@ contract XFollowFactory is DealBase, Initializable {
 
     function instruction() external view override returns (string memory) {
         return
-            "# X(Twitter) Follow Campaign Builder\n\n"
-            "Create paid follow campaigns on X(Twitter). Set a budget, define rewards, and followers earn USDC for following your account.\n\n"
+            "# Follow Campaign Launcher on X (Twitter)\n\n"
+            "Launch Sponsored Follow Campaigns on X (Twitter). Set a budget, define rewards, and followers earn USDC for following your account.\n\n"
+            "**Prerequisites**:\n"
+            "1. Obtain verifier signature via `request_sign` (sig + fee)\n"
+            "2. Ensure USDC allowance covers `grossAmount` -- the full budget is transferred to the campaign on creation\n"
+            "3. Query `PROTOCOL_FEE()` to get per-claim protocol fee, then: grossAmount = slots * (rewardPerFollow + verifierFee + PROTOCOL_FEE)\n\n"
             "## createDeal Parameters\n\n"
             "| Parameter | Type | Description |\n"
             "|------|------|------|\n"
@@ -234,19 +248,16 @@ contract XFollowFactory is DealBase, Initializable {
             "| sig | bytes | Verifier EIP-712 signature |\n"
             "| target_user_id | uint64 | Target X(Twitter) immutable user_id to be followed |\n"
             "| deadline | uint48 | Campaign end time (Unix seconds) |\n\n"
-            "**Prerequisites**:\n"
-            "1. Obtain verifier signature via `request_sign` (sig + fee)\n"
-            "2. USDC `approve(builder address, grossAmount)` -- the full budget is transferred to the campaign on creation\n"
-            "3. Query `PROTOCOL_FEE()` to get per-claim protocol fee, then: grossAmount = slots * (rewardPerFollow + verifierFee + PROTOCOL_FEE)\n\n"
             "## After Creation\n\n"
-            "- `createDeal` returns the deployed campaign contract address. Also emitted in `SubContractCreated` event.\n"
-            "- Query `campaigns(dealIndex)` on the builder to retrieve the campaign address.\n"
-            "- All follower interactions (claim, status queries) happen on the campaign contract, not the builder.\n"
-            "- Read the campaign's `instruction()` for follower-facing operations and dealStatus guide.\n\n"
-            "## Builder dealStatus\n\n"
+            "- `createDeal` returns `dealIndex` (uint256). Call `campaigns(dealIndex)` to retrieve the deployed campaign contract address.\n"
+            "- Read `dealStatus(dealIndex)` on the launcher to check whether the campaign exists (see Launcher dealStatus table below).\n\n"
+            "## Launcher dealStatus\n\n"
             "| Code | Status | Meaning |\n"
             "|----|------|------|\n"
             "| 1 | Created | Campaign deployed and live |\n"
-            "| 255 | NotFound | No campaign at this index |\n";
+            "| 255 | NotFound | No campaign at this index |\n\n"
+            "## Next: Follower Operations\n\n"
+            "- All follower interactions (claim, status queries) happen on the campaign contract, not the launcher.\n"
+            "- Read the campaign's `instruction()` for follower-facing operations and dealStatus guide.\n";
     }
 }

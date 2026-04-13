@@ -21,7 +21,6 @@ W="deno run --allow-net --allow-env --allow-read --allow-write scripts/run.ts"
 | `decode-revert` | HEX_DATA | `--contract`, `--chain` |
 | `to-raw` | AMOUNT | `--decimals` |
 | `fmt` | RAW_AMOUNT | `--decimals`, `--symbol` |
-| `relay-status` | TASK_ID | — |
 
 ## Option Details
 
