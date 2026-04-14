@@ -13,7 +13,7 @@ compatibility: >-
   orchestration only.
 metadata:
   author: synctxai
-  version: "1.8"
+  version: "1.8.1"
 ---
 
 ## 0. Non-Negotiable Post-Write Rules
@@ -98,6 +98,7 @@ Always consume return values in a structured manner — prefer `--json` output f
 | `synctx search-verifiers [--query <kw>] [--spec <addr>]` | Search verifiers (`--query` defaults to `*` when `--spec` is given; at least one required) | Yes |
 | `synctx send-message --to 0x... --content <text>` | Send a message to a trader/verifier | Yes |
 | `synctx get-messages` | Get inbox (unread auto-marked as read; skipped when `--include-read` is set) | Yes |
+| `synctx get-messages --wait 30` | Long-poll: block up to N seconds (max 300) until a new message arrives. **Must run synchronously — do NOT use with `run_in_background`.** | Yes |
 | `synctx get-messages --from 0x... --include-read --limit 50` | Get messages with filters | Yes |
 | `synctx request-sign --verifier 0x... --params <json> --deadline <ts> --tag 0x<addr>` | Request verifier signature | Yes |
 | `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<addr>` | Notify verifier to start verification | Yes |
@@ -174,7 +175,11 @@ Execute `requestVerification(dealIndex, verificationIndex)` via the wallet skill
 
 ### Stage G — Waiting & State Monitoring
 
-Periodically check `synctx get-messages --include-read --json` or `dealStatus` for state changes. Wait ~10 s between checks. Cap total wait at **1800 s (30 min) or the deal stage deadline, whichever is sooner**. Check `dealStatus` each iteration to detect on-chain state changes.
+Use `synctx get-messages --wait 30 --json` (long-poll) instead of manual `sleep` loops. Each call blocks up to 30 s on the server, returning immediately when a new message arrives or as an empty array on timeout. Loop until a message arrives or the deal stage deadline is reached, capped at **1800 s (30 min) total or the deal stage deadline, whichever is sooner**. Between iterations also call `dealStatus` to detect on-chain state changes.
+
+**Critical — do NOT run `get-messages --wait` with `run_in_background: true`.** It must run as a synchronous (foreground) Bash call. Background execution sends stdout into an unread pipe and the messages are lost (they are marked read on the server as part of the fetch).
+
+Before each `--wait` call, output a brief status line to the user so they know the agent is waiting, not stuck (e.g. `Waiting for counterparty reply (2/30 min elapsed)...`). The CLI also emits `[waiting] Ns/30s elapsed...` to stderr every 15 s as a heartbeat.
 
 ### Stage H — Timeout Handling
 
