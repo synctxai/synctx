@@ -98,7 +98,7 @@ Always consume return values in a structured manner — prefer `--json` output f
 | `synctx search-verifiers [--query <kw>] [--spec <addr>]` | Search verifiers (`--query` defaults to `*` when `--spec` is given; at least one required) | Yes |
 | `synctx send-message --to 0x... --content <text>` | Send a message to a trader/verifier | Yes |
 | `synctx get-messages` | Get inbox (unread auto-marked as read; skipped when `--include-read` is set) | Yes |
-| `synctx get-messages --wait 30` | Long-poll: block up to N seconds (max 300) until a new message arrives. **Must run synchronously — do NOT use with `run_in_background`.** | Yes |
+| `synctx get-messages --wait 30` | Long-poll: block up to N seconds (max 55) until a new message arrives. **Must run synchronously — do NOT use with `run_in_background`.** | Yes |
 | `synctx get-messages --from 0x... --include-read --limit 50` | Get messages with filters | Yes |
 | `synctx request-sign --verifier 0x... --params <json> --deadline <ts> --tag 0x<addr>` | Request verifier signature | Yes |
 | `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<addr>` | Notify verifier to start verification | Yes |
