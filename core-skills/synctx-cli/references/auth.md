@@ -1,12 +1,4 @@
-# Phase 1: Identity Authentication
-
-## Existing Token (Recommended)
-
-The CLI automatically manages tokens, stored at `.synctx/token.json` in the current project directory (JSON format containing `auth_token`, `address`, and `expires_at`). If the file exists and the wallet address matches the current one, subsequent commands will use it automatically; no additional action needed.
-
-Notes:
-- Tokens have an expiration time (`expires_at`); after expiry, follow the recovery flow to renew.
-- If the current wallet address differs from the `address` in the token file, the user has switched wallets and must re-register as a new user.
+# Authentication
 
 ## First-Time Registration
 
@@ -28,30 +20,28 @@ Notes:
    ```bash
    synctx register --wallet 0x... --signature 0x... --name "<user-chosen-name>" --description "<confirmed-description>" --json
    ```
-6. Confirm the response contains `status: "registered"` and `expires_at`. If the response includes any user-facing notice text (e.g. a `message` or `notice` field under the response or its sub-objects), **relay it to the user verbatim** — do not omit or paraphrase.
-7. The token has been automatically saved to `.synctx/token.json`; subsequent commands will use it automatically.
+6. Confirm the response contains `status: "registered"`. If the response includes any user-facing notice text (e.g. a `message` or `notice` field), **relay it to the user verbatim**.
+7. Registration is complete. The CLI handles all subsequent authentication automatically.
 
-## Registered but Token Lost or Expired
+## Re-Authentication (After Prolonged Inactivity)
 
-1. Obtain the wallet address.
-2. Get nonce:
+If a command fails with exit code 4 after a long period of inactivity:
+
+1. Get nonce:
    ```bash
    synctx get-nonce --wallet 0x... --json
    ```
-3. Sign:
+2. Sign:
    ```bash
    /wallet sign-message "SyncTx: <nonce>"
    ```
-4. Recover token:
+3. Recover:
    ```bash
    synctx recover-token --wallet 0x... --signature 0x... --json
    ```
-5. Confirm the response contains `status: "recovered"` and `expires_at`.
-6. Token has been automatically saved to `.synctx/token.json`.
+4. Retry the original command.
 
 ## Update Profile
-
-When registered and holding a valid token, you can update personal information directly:
 
 ```bash
 synctx update-profile --name <name> --description <desc> --json
@@ -59,21 +49,15 @@ synctx update-profile --name <name> --description <desc> --json
 
 Must include at least `--name` or `--description`.
 
-## Revoke Token
-
-Proactively revoke the current token:
+## Logout
 
 ```bash
 synctx revoke-token --json
 ```
 
-The token will be permanently invalidated and the local token file automatically deleted.
-
 ## Quick Failure Rules
 
 - `Invalid signature`: Restart from `synctx get-nonce`.
-- `Token expired` / `EXPIRED`: Use the `synctx recover-token` flow to renew.
-- `Token has been revoked` / `REVOKED`: Use the `synctx recover-token` flow to obtain a new token.
-- `Invalid token` / `INVALID`: Token does not exist; follow the registration or recovery flow.
-- `401` / Token invalid: Use the `synctx recover-token` flow.
-- Duplicate registration conflict: Switch to `synctx update-profile`.
+- Exit code 4 (any auth error): Use the re-authentication flow above.
+- 409 on `register`: Switch to `synctx recover-token`.
+- Duplicate registration conflict: Use `synctx update-profile`.
