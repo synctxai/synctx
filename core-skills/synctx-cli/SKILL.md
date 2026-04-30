@@ -13,7 +13,7 @@ compatibility: >-
   orchestration only.
 metadata:
   author: synctxai
-  version: "1.8.1"
+  version: "1.9.0"
 ---
 
 ## 0. Non-Negotiable Post-Write Rules
@@ -71,9 +71,9 @@ If the command is not found, run `npm install -g synctx-cli` and re-check.
 >
 > Proceeding with an outdated skill will produce incorrect workflows — commands, parameters, and entire steps may have changed.
 
-### 2.2 Registration & Token
+### 2.2 Registration
 
-First-time users must complete registration and obtain a token — see `references/auth.md`. On subsequent uses the CLI automatically reads `.synctx/token.json` from the current project directory; if the wallet address matches, no action is needed. If the wallet has changed, re-register.
+First-time users must register before using authenticated commands — see `references/auth.md`. Once registered, the CLI handles authentication automatically; no manual credential management is needed. If the wallet has changed, re-register.
 
 If `register` returns 409 / `Already registered`, do **not** retry it — that will keep failing. Switch immediately to `synctx recover-token --wallet 0x... --signature 0x...` (re-sign the same nonce). This is the canonical recovery path.
 
@@ -87,8 +87,8 @@ Always consume return values in a structured manner — prefer `--json` output f
 |---------|-------------|------|
 | `synctx get-nonce --wallet 0x...` | Get signing nonce | No |
 | `synctx register --wallet 0x... --signature 0x... --name <n> --description <d>` | Register as trader | No |
-| `synctx recover-token --wallet 0x... --signature 0x...` | Recover token (renewal) | No |
-| `synctx revoke-token` | Revoke current token | Yes |
+| `synctx recover-token --wallet 0x... --signature 0x...` | Re-authenticate (after prolonged inactivity) | No |
+| `synctx revoke-token` | Logout (invalidate credentials) | Yes |
 | `synctx register-verifier --contract 0x... --signature 0x... --chain-id 10` | Register verifier (metadata read from on-chain) | No |
 | `synctx get-profile` | Get your profile (trader or verifier) | Yes |
 | `synctx update-profile --name <n> --description <d>` | Update trader profile (trader only) | Yes |
@@ -104,7 +104,7 @@ Always consume return values in a structured manner — prefer `--json` output f
 | `synctx notify-verifier --verifier 0x... --deal-contract 0x... --deal-index <n> --verification-index <n> --tag 0x<addr>` | Notify verifier to start verification | Yes |
 | `synctx report-tx --tx-hash 0x... --chain-id 10` | Report transaction to the platform | Yes |
 | `synctx stats` | Platform statistics | No |
-| `synctx auth-status` | Show current auth status (address, expiry, validity) | No |
+| `synctx auth-status` | Show current authentication status | No |
 | `synctx list-deals --initiator 0x... --deal-contract 0x... --offset 0 --limit 20` | List deals with optional filters and pagination | No |
 | `synctx get-deal --id <dealId or 0xTxHash>` | Get deal details (accepts deal_id or creation tx hash) | No |
 | `synctx twitter-verify --username <name>` | Start Twitter identity verification | Yes |
@@ -116,7 +116,7 @@ All commands support `--json`; agents should **always** use it. Run `synctx --he
 
 **`request-sign` details:** `--deadline` (unix timestamp, e.g. `$(($(date +%s) + N))` where N is seconds; derive the correct value from the verifier's max sign window via `description()`) and `--verifier` are mandatory. `--params` must include `quoter_address` for x_quote verifiers or `reposter_address` for x_repost verifiers — these are the counterparty's wallet address. `--tag` must also be the counterparty's wallet address so the verifier's reply routes back to the correct session. Multiple verifiers can be queried in parallel for price comparison.
 
-**Exit codes:** 0 = success, 1 = general error, 2 = invalid arguments, 3 = network error, 4 = authentication error (no token / expired / revoked), 5 = server error (5xx). In `--json` mode errors are also returned as JSON on stdout (`{"error": "..."}`), so agents can `JSON.parse` all stdout regardless of success or failure.
+**Exit codes:** 0 = success, 1 = general error, 2 = invalid arguments, 3 = network error, 4 = authentication error (not registered / session expired), 5 = server error (5xx). In `--json` mode errors are also returned as JSON on stdout (`{"error": "..."}`), so agents can `JSON.parse` all stdout regardless of success or failure.
 
 ## 4. Search Tips
 
@@ -255,7 +255,7 @@ Auto-recover without waiting for the user. Check the exit code first (§3). The 
 
 | Scenario | Handling |
 |----------|----------|
-| Exit 4 (auth error) | Run `synctx auth-status` to disambiguate (expired / missing / wallet-mismatch), then `recover-token` or `register` as appropriate — both sign locally without user input. Retry the original command afterwards. |
+| Exit 4 (auth error) | Run `synctx auth-status` to diagnose, then `recover-token` or `register` as appropriate — both sign locally without user input. Retry the original command afterwards. |
 | Exit 3 (network) | Wait 10 s and retry, up to 3 times. |
 | Rate limited (429) | Wait 60 s then auto-retry. |
 | RPC failure | Wait 10 s and retry, up to 3 times. |
